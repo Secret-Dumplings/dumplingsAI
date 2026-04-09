@@ -1,7 +1,7 @@
 # 1. 准备一个“双键”容器
 agent_list = {}          # {key1: cls, key2: cls}
 
-def register_agent(uuid, name):
+def register_agent(uuid, name, description):
     """
     类装饰器：把被装饰的类同时注册到两个字典键下。
     两个键指向**同一个类对象**，因此内存中只有一份。
@@ -9,6 +9,7 @@ def register_agent(uuid, name):
     def _decorator(cls):
         cls.uuid = uuid
         cls.name = name
+        cls.description = description
         cls_instantiation = cls()
         agent_list[uuid] = cls_instantiation
         agent_list[name] = cls_instantiation

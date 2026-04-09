@@ -31,6 +31,7 @@ class Agent():
     api_key = None
     fc_model = True # 现在xml工具调用改为下位支持，如有bug修复优先级降低
     stream = True
+    description = None
     # ---------------- 通用构造 ----------------
     def __init__(self,new_load=True):
         self.uuid=self.__class__.uuid
@@ -685,17 +686,19 @@ class Agent():
         for key, agent in agent_list.items():
             agent_uuid = getattr(agent, 'uuid', None)
             agent_name = getattr(agent, 'name', None)
+            agent_description = getattr(agent, 'description', None)
             if agent_uuid and agent_name:
                 if agent_uuid not in unique_agents:
                     unique_agents[agent_uuid] = {
                         'uuid': agent_uuid,
-                        'name': agent_name
+                        'name': agent_name,
+                        "description": agent_description
                     }
 
         # 格式化为易读的字符串
         agents_info = []
         for agent_info in unique_agents.values():
-            agents_info.append(f"- {agent_info['name']} (UUID: {agent_info['uuid']})")
+            agents_info.append(f"- {agent_info['name']} (UUID: {agent_info['uuid']}) description: {agent_info['description']}")
 
         result = "可用的Agent列表：\n" + "\n".join(agents_info)
         return result
