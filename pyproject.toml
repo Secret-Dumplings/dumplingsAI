@@ -1,6 +1,6 @@
 [project]
 name = "Dumplings"
-version = "0.1.0"
+version = "0.1.1"
 description = "AI Company - 基于 LLM 的多智能体协作系统框架"
 readme = "README.md"
 requires-python = ">=3.10"
