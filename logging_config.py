@@ -62,7 +62,7 @@ def setup_logging(
     """
     # 确定日志级别
     if level is None:
-        level = os.getenv("LOGURU_LEVEL", "DEBUG")
+        level = os.getenv("LOGURU_LEVEL", "INFO")
 
     # 创建日志目录
     os.makedirs(log_dir, exist_ok=True)

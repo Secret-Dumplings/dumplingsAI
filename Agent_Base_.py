@@ -4,6 +4,8 @@ import platform
 import requests
 import re
 import sys
+import uuid
+import time
 from abc import ABC, abstractmethod
 from bs4 import BeautifulSoup
 import threading
@@ -29,11 +31,14 @@ class Agent():
     api_key = None
     fc_model = True # 现在xml工具调用改为下位支持，如有bug修复优先级降低
     stream = True
+    description = None
     # ---------------- 通用构造 ----------------
     def __init__(self,new_load=True):
         self.uuid=self.__class__.uuid
         self.name=self.__class__.name
         self.stream_run=False
+        self.current_task_id = None  # 当前任务 ID
+        self.tool_call_hooks = []     # 工具调用钩子列表
         agent_name = getattr(self.__class__, 'name', None) or getattr(self.__class__, '__name__', None)
         if agent_name and self.uuid:
             tool_registry.register_agent_uuid(self.uuid, agent_name)
@@ -94,6 +99,37 @@ class Agent():
             self.os_main_folder = os.getenv("HOME")
 
         threading.Thread(target=self.Connectivity, daemon=True).start()
+
+    # ---------------- 辅助方法 ----------------
+    def _generate_task_id(self):
+        """生成唯一任务 ID"""
+        return str(uuid.uuid4())
+
+    def _get_timestamp(self):
+        """获取当前时间戳（毫秒级）"""
+        return int(time.time() * 1000)
+
+    def register_tool_hook(self, hook_func):
+        """
+        注册工具调用钩子
+        hook_func 签名：hook_func(event_type, tool_name, tool_args, tool_result, task_id)
+        event_type: 'before' | 'after' | 'error'
+        """
+        self.tool_call_hooks.append(hook_func)
+
+    def _execute_hooks(self, event_type, tool_name, tool_args, tool_result=None):
+        """执行所有注册的钩子"""
+        for hook in self.tool_call_hooks:
+            try:
+                hook(
+                    event_type=event_type,
+                    tool_name=tool_name,
+                    tool_args=tool_args,
+                    tool_result=tool_result,
+                    task_id=self.current_task_id
+                )
+            except Exception as e:
+                logger.error(f"钩子执行失败：{e}")
 
     # ---------------- 连通性测试 ----------------
     def Connectivity(self):
@@ -349,9 +385,18 @@ class Agent():
                 # 调用工具（解析 arguments 为 dict）
                 try:
                     args = json.loads(tool_call['function']['arguments'])
+                    # 生成任务 ID
+                    self.current_task_id = self._generate_task_id()
+                    # 执行 before 钩子
+                    self._execute_hooks('before', tool_name, args)
                     logger.debug(f"调用工具 {tool_name}，参数: {args}")
                     self.pack(tool_name=tool_name, tool_parameter=args)
                     result = tool_func(**args)
+
+                    # 执行 after 钩子
+                    self._execute_hooks('after', tool_name, args, result)
+                    # 打包工具返回值
+                    self.pack(tool_result=result, tool_name=tool_name)
                     tool_results.append({
                         'tool_call_id': tool_id,
                         'name': tool_name,
@@ -360,6 +405,10 @@ class Agent():
                 except Exception as e:
                     error_msg = f"执行工具 {tool_name} 时出错: {str(e)}"
                     logger.error(error_msg)
+
+                    # 执行 error 钩子（如果 args 已定义）
+                    if 'args' in locals():
+                        self._execute_hooks('error', tool_name, args, error_msg)
                     tool_results.append({
                         'tool_call_id': tool_id,
                         'name': tool_name,
@@ -434,6 +483,12 @@ class Agent():
                 if hasattr(child, 'name') and child.name:
                     params[child.name] = child.text
 
+            # 生成任务 ID
+            self.current_task_id = self._generate_task_id()
+
+            # 执行 before 钩子
+            self._execute_hooks('before', tool_name, params)
+
             self.pack(tool_name=tool_name, tool_parameter=params)
 
             # 执行工具：根据函数签名决定传递 dict 还是解包参数
@@ -457,6 +512,13 @@ class Agent():
                 except TypeError:
                     # 如果解包失败，回退到传递整个 XML 块（向后兼容）
                     result = tool_func(block)
+
+            # 执行 after 钩子（传入结果）
+            self._execute_hooks('after', tool_name, params, result)
+
+            # 打包工具返回值
+            self.pack(tool_result=result, tool_name=tool_name)
+
             if not result:
                 result = f"no return for the tool{tool_name}"
 
@@ -485,11 +547,31 @@ class Agent():
             return self.history[-1].get("content")
         return full_content
 
-    def pack(self, message=None,tool_model=False, tool_name=None, tool_parameter=None, finish_task=False, other=False):
+    def pack(self, message=None, tool_model=False, tool_name=None, tool_parameter=None,
+             finish_task=False, other=False, tool_result=None):
+        """
+        打包输出内容，包含 AI UUID、任务戳和时间戳
+
+        参数:
+            message: 普通消息内容
+            tool_model: 是否是工具模型调用
+            tool_name: 工具名称
+            tool_parameter: 工具参数
+            finish_task: 是否任务完成
+            other: 其他标记
+            tool_result: 工具执行结果
+        """
         content = {}
+        task_id = self.current_task_id or self._generate_task_id()
+        timestamp = self._get_timestamp()
+
         if finish_task:
             content = {
-                "task": True
+                "task": True,
+                "task_id": task_id,
+                "timestamp": timestamp,
+                "ai_uuid": self.uuid,
+                "ai_name": self.name
             }
         elif tool_model:
             content = {
@@ -497,16 +579,31 @@ class Agent():
                 "tool_parameter": tool_parameter,
                 "ai_uuid": self.uuid,
                 "ai_name": self.name,
+                "task_id": task_id,
+                "timestamp": timestamp,
+                "task": False
+            }
+        elif tool_result is not None:
+            # 工具返回值
+            content = {
+                "tool_result": tool_result,
+                "tool_name": tool_name,
+                "ai_uuid": self.uuid,
+                "ai_name": self.name,
+                "task_id": task_id,
+                "timestamp": timestamp,
                 "task": False
             }
         else:
             content = {
-            "message": message,
-            "ai_uuid": self.uuid,
-            "ai_name": self.name,
-            "other": other,
-            "task": False
-        }
+                "message": message,
+                "ai_uuid": self.uuid,
+                "ai_name": self.name,
+                "other": other,
+                "task_id": task_id,
+                "timestamp": timestamp,
+                "task": False
+            }
         self.out(content)
 
     def out(self, content):
@@ -589,17 +686,19 @@ class Agent():
         for key, agent in agent_list.items():
             agent_uuid = getattr(agent, 'uuid', None)
             agent_name = getattr(agent, 'name', None)
+            agent_description = getattr(agent, 'description', None)
             if agent_uuid and agent_name:
                 if agent_uuid not in unique_agents:
                     unique_agents[agent_uuid] = {
                         'uuid': agent_uuid,
-                        'name': agent_name
+                        'name': agent_name,
+                        "description": agent_description
                     }
 
         # 格式化为易读的字符串
         agents_info = []
         for agent_info in unique_agents.values():
-            agents_info.append(f"- {agent_info['name']} (UUID: {agent_info['uuid']})")
+            agents_info.append(f"- {agent_info['name']} (UUID: {agent_info['uuid']}) description: {agent_info['description']}")
 
         result = "可用的Agent列表：\n" + "\n".join(agents_info)
         return result
