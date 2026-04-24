@@ -722,8 +722,7 @@ class Agent():
             if report_content_tag:
                 report_content = report_content_tag.text
 
-        if report_content:
-            print(report_content)
+
         # 返回完成报告，作为 tool 响应内容
         return report_content if report_content else "任务已完成"
 
