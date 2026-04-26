@@ -24,6 +24,7 @@ Dumplings - 多智能体协作框架
 - BaseAgent : Agent 基类
 - agent_list : 已注册 Agent 字典
 - mcp_bridge : MCP 服务器集成模块
+- skill : Agent Skills 开放标准集成
 
 示例代码
 --------
@@ -61,6 +62,10 @@ except ImportError:
     # mcp 未安装时提供兼容性
     pass
 
+# 从 skill 导入 Skill 相关功能
+from .skill import skill_registry, Skill
+from .skill_bridge import register_skill_as_tool, unregister_skill_from_tool
+
 __version__ = "0.1.0"
 __author__ = "secret_dumplings"
 __all__ = [
@@ -80,6 +85,11 @@ __all__ = [
     "start_health_check",
     "stop_health_check",
     "mcp_session_context",
+    # Skill 功能
+    "skill_registry",
+    "Skill",
+    "register_skill_as_tool",
+    "unregister_skill_from_tool",
     # 元信息
     "__version__",
     "__author__",
@@ -165,6 +175,22 @@ def help():
         server_path="path/to/mcp_server.py",
         allowed_agents=["my_agent"]
     )
+
+[6. Skills 集成]
+
+    # 扫描并注册 Skills（支持 .claude/skills/ 目录）
+    from pathlib import Path
+    Dumplings.skill_registry.scan_and_register([Path(".")])
+
+    # 直接注册单个 Skill 目录
+    Dumplings.skill_registry.register_skill(Path(".claude/skills/my-skill"))
+
+    # Agent 自动发现并使用 Skills（通过 tool_registry 桥接）
+    # Skills 会出现在 Agent 的工具列表中，可通过 Function Calling 调用
+
+    # 查询 Skills
+    Dumplings.skill_registry.list_skills()
+    Dumplings.skill_registry.search_skills("关键词")
 
 [配置说明]
 

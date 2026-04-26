@@ -77,6 +77,13 @@ class Agent():
             if not self.fc_model:
                 tools_prompt += "在使用xml格式的工具时应采用（无参数调用）<工具名></工具名>（含参数调用）<工具名><参数1>放入你想传入的内容</参数1>...</工具名>"
 
+        # 注入 Skills 信息
+        try:
+            from .skill import skill_registry
+            tools_prompt += skill_registry.get_skills_prompt_text(self.uuid)
+        except ImportError:
+            pass
+
 
         prompt = self.prompt + tools_prompt + ", 你的uuid " + str(self.uuid)
         logger.debug(f"Agent {self.name} 初始化，系统提示词长度：{len(prompt)}")
@@ -150,7 +157,7 @@ class Agent():
         return rsp.status_code == 200
 
     # ---------------- 主对话函数 ----------------
-    def conversation_with_tool(self, messages=None, tool=False, images=None):
+    def conversation_with_tool(self, messages=None, tool=False, images=None, skip_add_in_history=False):
         """
         进行对话，支持多模态输入（文本 + 图片）
 
@@ -158,7 +165,14 @@ class Agent():
             messages: 文本消息
             tool: 是否是工具调用后的继续对话
             images: 图片列表，可以是 base64 字符串或图片 URL
+            skip_add_in_history: 是否不将当前对话加入主历史（获得上下文但不修改 history）
         """
+        # 确定使用的历史列表
+        if skip_add_in_history:
+            work_history = [{"role": "system", "content": self.history[0]["content"]}]
+        else:
+            work_history = self.history
+
         if messages:
             # 如果有图片，构建多模态内容
             if images:
@@ -175,9 +189,9 @@ class Agent():
                             "type": "image_url",
                             "image_url": {"url": f"data:image/png;base64,{img}"}
                         })
-                self.history.append({"role": "user", "content": content_list})
+                work_history.append({"role": "user", "content": content_list})
             else:
-                self.history.append({"role": "user", "content": messages})
+                work_history.append({"role": "user", "content": messages})
 
         if self.fc_model:
             # Function Calling 模式
@@ -233,25 +247,32 @@ class Agent():
                 if hasattr(self, builtin_tool['function']['name']) and callable(getattr(self, builtin_tool['function']['name'])):
                     tools_schema.append(builtin_tool)
 
+            # 添加 Skills 到 Function Calling schema
+            try:
+                from .skill import skill_registry
+                tools_schema.extend(skill_registry.get_all_tool_schemas())
+            except ImportError:
+                pass
+
             payload = {
                 "model": self.model_name,
-                "messages": self.history,
+                "messages": work_history,
                 "stream": self.stream,
                 "tools": tools_schema,
                 "tool_choice": "auto"
             }
-            # if self.stream:
-            #     payload["stream_options"] = {"include_usage": True},
+            if self.stream:
+                payload["stream_options"] = {"include_usage": True},
         else:
             # XML 模式（原有逻辑）
             payload = {
                 "model": self.model_name,
-                "messages": self.history,
+                "messages": work_history,
                 "stream": self.stream,
                 "stream_options": {"include_usage": True}
             }
-            # if self.stream:
-            #     payload["stream_options"] = {"include_usage": True},
+            if self.stream:
+                payload["stream_options"] = {"include_usage": True},
 
         rsp = requests.post(
             self.api_provider,
@@ -349,7 +370,7 @@ class Agent():
             logger.debug(f"发现 Function Calling 工具调用: {tool_calls_list}")
 
             # 添加 assistant message with tool_calls
-            self.history.append({
+            work_history.append({
                 "role": "assistant",
                 "content": None,
                 "tool_calls": tool_calls_list
@@ -417,7 +438,7 @@ class Agent():
 
             # 添加 tool responses 到历史
             for result in tool_results:
-                self.history.append({
+                work_history.append({
                     "role": "tool",
                     "tool_call_id": result['tool_call_id'],
                     "name": result['name'],
@@ -426,7 +447,7 @@ class Agent():
 
             # 继续对话
             logger.debug("工具执行完成，继续对话")
-            return self.conversation_with_tool(tool=True)
+            return self.conversation_with_tool(tool=True, skip_add_in_history=skip_add_in_history)
 
         # XML 模式：提取并执行工具
         xml_pattern = re.compile(r'<(\w+)>.*?</\1>', flags=re.S)
@@ -469,7 +490,7 @@ class Agent():
                 if available_tools:
                     tool_error += f" 你可以使用以下工具：{', '.join(available_tools)}"
 
-                self.history.append({"role": "system", "content": tool_error})
+                work_history.append({"role": "system", "content": tool_error})
                 tool_results.append({"error": tool_error})
                 logger.warning(f"工具 {tool_name} 未找到，可用工具: {available_tools}")
                 continue
@@ -536,15 +557,15 @@ class Agent():
             n = 0
             for i in tool_results:
                 try:
-                    self.history.append({"role": "system", "content": f"{tool_names[n]} results: {i}"})
+                    work_history.append({"role": "system", "content": f"{tool_names[n]} results: {i}"})
                     n+=1
                 except:
                     break
             logger.debug(f"对话历史长度：{len(self.history)}")
-            return self.conversation_with_tool(tool=True)
+            return self.conversation_with_tool(tool=True, skip_add_in_history=skip_add_in_history)
         if tool:
-            logger.debug(f"返回对话历史最后一条，长度：{len(self.history[-1].get('content')) if self.history[-1].get('content') else 0}")
-            return self.history[-1].get("content")
+            logger.debug(f"返回对话历史最后一条，长度：{len(work_history[-1].get('content')) if work_history[-1].get('content') else 0}")
+            return work_history[-1].get("content")
         return full_content
 
     def pack(self, message=None, tool_model=False, tool_name=None, tool_parameter=None,
