@@ -643,7 +643,7 @@ class Agent():
 
     def reload(self):
         self.__init__(new_load=False)
-        return "successfully reloaded 请查看最新更新提示词"
+        return "successfully reloaded"
 
     def get_all_available_tools(self) -> list:
         tools = []
