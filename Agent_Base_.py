@@ -157,7 +157,7 @@ class Agent():
         return rsp.status_code == 200
 
     # ---------------- 主对话函数 ----------------
-    def conversation_with_tool(self, messages=None, tool=False, images=None, skip_add_in_history=False):
+    def conversation_with_tool(self, messages=None, tool=False, images=None):
         """
         进行对话，支持多模态输入（文本 + 图片）
 
@@ -165,13 +165,8 @@ class Agent():
             messages: 文本消息
             tool: 是否是工具调用后的继续对话
             images: 图片列表，可以是 base64 字符串或图片 URL
-            skip_add_in_history: 是否不将当前对话加入主历史（获得上下文但不修改 history）
         """
-        # 确定使用的历史列表
-        if skip_add_in_history:
-            work_history = [{"role": "system", "content": self.history[0]["content"]}]
-        else:
-            work_history = self.history
+        work_history = self.history
 
         if messages:
             # 如果有图片，构建多模态内容
@@ -447,7 +442,7 @@ class Agent():
 
             # 继续对话
             logger.debug("工具执行完成，继续对话")
-            return self.conversation_with_tool(tool=True, skip_add_in_history=skip_add_in_history)
+            return self.conversation_with_tool(tool=True)
 
         # XML 模式：提取并执行工具
         xml_pattern = re.compile(r'<(\w+)>.*?</\1>', flags=re.S)
@@ -562,7 +557,7 @@ class Agent():
                 except:
                     break
             logger.debug(f"对话历史长度：{len(self.history)}")
-            return self.conversation_with_tool(tool=True, skip_add_in_history=skip_add_in_history)
+            return self.conversation_with_tool(tool=True)
         if tool:
             logger.debug(f"返回对话历史最后一条，长度：{len(work_history[-1].get('content')) if work_history[-1].get('content') else 0}")
             return work_history[-1].get("content")
