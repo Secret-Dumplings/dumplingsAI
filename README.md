@@ -41,15 +41,7 @@ Dumplings 是一个轻量级的多智能体协作框架，支持：
 ### 使用 uv（推荐）
 
 ```bash
-cd Dumplings
 uv add git+https://github.com/Secret-Dumplings/Dumplings.git
-```
-
-### 使用 pip
-
-```bash
-cd Dumplings
-pip install -e .
 ```
 
 ### 依赖说明
