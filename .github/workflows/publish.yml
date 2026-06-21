@@ -33,7 +33,7 @@ jobs:
 
       - name: Build sdist & wheel
         run: |
-          uv run python -m pip install --upgrade build
+          uv pip install --upgrade build
           uv run python -m build
 
       - name: Upload artifacts
