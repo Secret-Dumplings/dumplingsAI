@@ -1,6 +1,6 @@
-# Dumplings
+# dumplingsAI
 
-> Dumplings开创AI新架构
+> dumplingsAI开创AI新架构
 
 ## 目录
 
@@ -16,7 +16,7 @@
 
 ## 简介
 
-Dumplings 是一个轻量级的多智能体协作框架，支持：
+dumplingsAI 是一个轻量级的多智能体协作框架，支持：
 
 - **多智能体注册与管理** - 通过装饰器快速注册 Agent
 - **工具注册系统** - 将函数注册为 Agent 可调用的工具
@@ -41,12 +41,12 @@ Dumplings 是一个轻量级的多智能体协作框架，支持：
 ### 使用 uv（推荐）
 
 ```bash
-uv add git+https://github.com/Secret-Dumplings/Dumplings.git
+uv add git+https://github.com/Secret-Dumplings/dumplingsAI.git
 ```
 
 ### 依赖说明
 
-Dumplings 的核心依赖：
+dumplingsAI 的核心依赖：
 
 ```toml
 dependencies = [
@@ -74,13 +74,13 @@ API_KEY=your_api_key_here
 
 ```python
 import os
-import Dumplings
+import dumplingsAI
 from dotenv import load_dotenv
 
 load_dotenv()
 
-@Dumplings.register_agent("unique-uuid-here", "my_agent")
-class MyAgent(Dumplings.BaseAgent):
+@dumplingsAI.register_agent("unique-uuid-here", "my_agent")
+class MyAgent(dumplingsAI.BaseAgent):
     """Agent 的简介，描述其职责和能力"""
     prompt = "你是一个名为汤圆 AI 的智能助手"
     api_provider = "https://api.example.com/v1/chat/completions"
@@ -89,14 +89,14 @@ class MyAgent(Dumplings.BaseAgent):
     fc_model = True  # 使用 Function Calling 模式
 
 # 运行
-agent = Dumplings.agent_list["my_agent"]
+agent = dumplingsAI.agent_list["my_agent"]
 agent.conversation_with_tool("你好，请介绍一下自己")
 ```
 
 ### 3. 注册自定义工具
 
 ```python
-@Dumplings.tool_registry.register_tool(
+@dumplingsAI.tool_registry.register_tool(
     allowed_agents=["my_agent"],  # 允许使用的 Agent
     name="get_weather",
     description="查询天气信息",
@@ -121,8 +121,8 @@ def get_weather(city: str) -> str:
 使用 `@register_agent(uuid, name)` 装饰器注册 Agent：
 
 ```python
-@Dumplings.register_agent("uuid-here", "agent_name")
-class MyAgent(Dumplings.BaseAgent):
+@dumplingsAI.register_agent("uuid-here", "agent_name")
+class MyAgent(dumplingsAI.BaseAgent):
     prompt = "你的系统提示词"
     api_provider = "API 端点"
     model_name = "模型名称"
@@ -150,7 +150,7 @@ class MyAgent(Dumplings.BaseAgent):
 使用 `@tool_registry.register_tool()` 装饰器注册工具：
 
 ```python
-@Dumplings.tool_registry.register_tool(
+@dumplingsAI.tool_registry.register_tool(
     allowed_agents=None,  # None 表示所有 Agent 可用
     name="tool_name",
     description="工具描述",
@@ -168,12 +168,12 @@ def my_tool(param1: str) -> str:
 
 ### 工具调用模式
 
-Dumplings 支持两种工具调用模式：
+dumplingsAI 支持两种工具调用模式：
 
 #### Function Calling 模式（推荐）
 
 ```python
-class MyAgent(Dumplings.BaseAgent):
+class MyAgent(dumplingsAI.BaseAgent):
     fc_model = True  # 启用 Function Calling
 ```
 
@@ -182,7 +182,7 @@ Agent 会以标准 function calling 格式调用工具。
 #### XML 模式
 
 ```python
-class MyAgent(Dumplings.BaseAgent):
+class MyAgent(dumplingsAI.BaseAgent):
     fc_model = False  # 使用 XML 模式
 ```
 
@@ -199,7 +199,7 @@ Agent 使用 XML 标签调用工具：
 ### 模块导出
 
 ```python
-from Dumplings import (
+from dumplingsAI import (
     register_agent,      # Agent 注册装饰器
     tool_registry,       # 工具注册器实例
     BaseAgent,           # Agent 基类
@@ -212,8 +212,8 @@ from Dumplings import (
 类装饰器，注册一个 Agent 类。
 
 ```python
-@Dumplings.register_agent("uuid-123", "helper_bot")
-class HelperAgent(Dumplings.BaseAgent):
+@dumplingsAI.register_agent("uuid-123", "helper_bot")
+class HelperAgent(dumplingsAI.BaseAgent):
     ...
 ```
 
@@ -252,10 +252,10 @@ class HelperAgent(Dumplings.BaseAgent):
 
 ```python
 # 通过 UUID 获取
-agent = Dumplings.agent_list["uuid-123"]
+agent = dumplingsAI.agent_list["uuid-123"]
 
 # 通过名称获取
-agent = Dumplings.agent_list["agent_name"]
+agent = dumplingsAI.agent_list["agent_name"]
 ```
 
 ---
@@ -266,20 +266,20 @@ agent = Dumplings.agent_list["agent_name"]
 
 ```python
 import os
-import Dumplings
+import dumplingsAI
 from dotenv import load_dotenv
 
 load_dotenv()
 
-@Dumplings.register_agent("001", "simple_agent")
-class SimpleAgent(Dumplings.BaseAgent):
+@dumplingsAI.register_agent("001", "simple_agent")
+class SimpleAgent(dumplingsAI.BaseAgent):
     prompt = "你是一个简单的问答助手"
     api_provider = "https://api.example.com/v1/chat/completions"
     model_name = "qwen3.5-plus"
     api_key = os.getenv("API_KEY")
 
 if __name__ == "__main__":
-    agent = Dumplings.agent_list["simple_agent"]
+    agent = dumplingsAI.agent_list["simple_agent"]
     agent.conversation_with_tool("你好")
 ```
 
@@ -287,13 +287,13 @@ if __name__ == "__main__":
 
 ```python
 import os
-import Dumplings
+import dumplingsAI
 from dotenv import load_dotenv
 
 load_dotenv()
 
 # 注册工具
-@Dumplings.tool_registry.register_tool(
+@dumplingsAI.tool_registry.register_tool(
     allowed_agents=["calculator"],
     name="add",
     description="计算两个数的和",
@@ -310,15 +310,15 @@ def add(a: float, b: float) -> str:
     return str(a + b)
 
 # 注册 Agent
-@Dumplings.register_agent("002", "calculator")
-class CalculatorAgent(Dumplings.BaseAgent):
+@dumplingsAI.register_agent("002", "calculator")
+class CalculatorAgent(dumplingsAI.BaseAgent):
     prompt = "你是一个计算器，可以执行数学运算"
     api_provider = "https://api.example.com/v1/chat/completions"
     model_name = "qwen3.5-plus"
     api_key = os.getenv("API_KEY")
 
 if __name__ == "__main__":
-    agent = Dumplings.agent_list["calculator"]
+    agent = dumplingsAI.agent_list["calculator"]
     agent.conversation_with_tool("请帮我计算 123 + 456")
 ```
 
@@ -326,29 +326,29 @@ if __name__ == "__main__":
 
 ```python
 import os
-import Dumplings
+import dumplingsAI
 from dotenv import load_dotenv
 
 load_dotenv()
 
 # 时间查询 Agent
-@Dumplings.register_agent("time-uuid", "time_agent")
-class TimeAgent(Dumplings.BaseAgent):
+@dumplingsAI.register_agent("time-uuid", "time_agent")
+class TimeAgent(dumplingsAI.BaseAgent):
     prompt = "你是时间管理者，负责提供当前时间"
     api_provider = "https://api.example.com/v1/chat/completions"
     model_name = "qwen3.5-plus"
     api_key = os.getenv("API_KEY")
 
 # 调度 Agent
-@Dumplings.register_agent("schedule-uuid", "scheduling_agent")
-class SchedulingAgent(Dumplings.BaseAgent):
+@dumplingsAI.register_agent("schedule-uuid", "scheduling_agent")
+class SchedulingAgent(dumplingsAI.BaseAgent):
     prompt = "你是一个调度助手，可以请求其他 Agent 帮助"
     api_provider = "https://api.example.com/v1/chat/completions"
     model_name = "qwen3.5-plus"
     api_key = os.getenv("API_KEY")
 
 if __name__ == "__main__":
-    scheduler = Dumplings.agent_list["scheduling_agent"]
+    scheduler = dumplingsAI.agent_list["scheduling_agent"]
     # 请求时间 Agent 帮助
     scheduler.conversation_with_tool(
         "请请求 time_agent 帮你查看当前时间"
@@ -358,10 +358,10 @@ if __name__ == "__main__":
 ### 示例 4：注册 MCP 服务器工具
 
 ```python
-import Dumplings
+import dumplingsAI
 
 # 注册 MCP 服务器的所有工具
-Dumplings.register_mcp_tools(
+dumplingsAI.register_mcp_tools(
     server_path="path/to/mcp_server.py",
     register_resources=True,
     allowed_agents=["my_agent"]
@@ -371,8 +371,8 @@ Dumplings.register_mcp_tools(
 ### 示例 5：自定义输出处理
 
 ```python
-@Dumplings.register_agent("003", "custom_agent")
-class CustomAgent(Dumplings.BaseAgent):
+@dumplingsAI.register_agent("003", "custom_agent")
+class CustomAgent(dumplingsAI.BaseAgent):
     prompt = "你是一个自定义输出的 Agent"
     api_provider = "https://api.example.com/v1/chat/completions"
     model_name = "qwen3.5-plus"
@@ -397,10 +397,10 @@ class CustomAgent(Dumplings.BaseAgent):
 
 ```python
 # 查看所有注册工具
-print(Dumplings.tool_registry.list_tools())
+print(dumplingsAI.tool_registry.list_tools())
 
 # 查看 Agent 可用的工具
-agent = Dumplings.agent_list["my_agent"]
+agent = dumplingsAI.agent_list["my_agent"]
 tools = agent.get_all_available_tools()
 print(tools)
 ```
@@ -409,14 +409,14 @@ print(tools)
 
 ```python
 # 查看 MCP 会话信息
-from Dumplings.mcp_bridge import get_session_info
+from dumplingsAI.mcp_bridge import get_session_info
 print(get_session_info())
 ```
 
 ### Q: 如何关闭所有 MCP 会话？
 
 ```python
-from Dumplings.mcp_bridge import close_all_mcp_sessions_sync
+from dumplingsAI.mcp_bridge import close_all_mcp_sessions_sync
 close_all_mcp_sessions_sync()
 ```
 

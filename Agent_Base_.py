@@ -19,7 +19,7 @@ except:
 
 class Agent():
     """
-    所有具体 Dumplings 必须实现四个属性：
+    所有具体 dumplingsAI 必须实现四个属性：
         api_key
         api_provider
         model_name
@@ -682,7 +682,7 @@ class Agent():
             return "<ask_for_help> 缺少 message 字段"
 
         try:
-            from Dumplings import agent_list
+            from dumplingsAI import agent_list
             target_cls = agent_list[agent_id]
         except KeyError as e:
             return f"未找到 uuid/别名 {e}"
@@ -695,7 +695,7 @@ class Agent():
         """
         工具方法：返回所有可用的Agent列表，包括它们的UUID和名称
         """
-        from Dumplings import agent_list
+        from dumplingsAI import agent_list
 
         # 获取所有唯一的Agent（避免UUID和名称重复）
         unique_agents = {}

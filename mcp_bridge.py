@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 MCP Bridge - 将 MCP 服务器工具转换为标准工具（非 XML）
-使用 Dumplings.tool_registry.register_tool 直接注册
+使用 dumplingsAI.tool_registry.register_tool 直接注册
 
 改进：
 - 使用 asyncio.Lock 替代 threading.Lock

@@ -8,7 +8,7 @@
 - 避免日志处理器重复或配置冲突
 
 用法：
-    from Dumplings.logging_config import logger, setup_logging
+    from dumplingsAI.logging_config import logger, setup_logging
 
     # 使用默认配置
     logger = setup_logging()

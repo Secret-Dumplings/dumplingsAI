@@ -1,20 +1,20 @@
 # -*- coding: utf-8 -*-
 """
-Dumplings - 多智能体协作框架
+dumplingsAI - 多智能体协作框架
 ============================
 
 基于 LLM 的轻量级多智能体协作系统框架。
 
 快速开始
 --------
->>> import Dumplings
->>> @Dumplings.register_agent("uuid", "name")
-... class MyAgent(Dumplings.BaseAgent):
+>>> import dumplingsAI
+>>> @dumplingsAI.register_agent("uuid", "name")
+... class MyAgent(dumplingsAI.BaseAgent):
 ...     prompt = "你是一个助手"
 ...     api_provider = "https://api.example.com/v1/chat/completions"
 ...     model_name = "qwen3.5-plus"
 ...     api_key = "your-api-key"
->>> agent = Dumplings.agent_list["name"]
+>>> agent = dumplingsAI.agent_list["name"]
 >>> agent.conversation_with_tool("你好")
 
 核心组件
@@ -98,11 +98,11 @@ __all__ = [
 
 def help():
     """
-    打印 Dumplings 框架的帮助信息和使用示例。
+    打印 dumplingsAI 框架的帮助信息和使用示例。
 
     示例:
-        >>> import Dumplings
-        >>> Dumplings.help()
+        >>> import dumplingsAI
+        >>> dumplingsAI.help()
     """
     import sys
     # Windows 终端兼容性：设置 UTF-8 编码
@@ -115,26 +115,26 @@ def help():
 
     print("""
 +======================================================================+
-|                    Dumplings 多智能体协作框架                          |
+|                    dumplingsAI 多智能体协作框架                          |
 |                         快速上手指南                                  |
 +======================================================================+
 
 [1. 创建第一个 Agent]
 
-    @Dumplings.register_agent("unique-uuid", "my_agent")
-    class MyAgent(Dumplings.BaseAgent):
+    @dumplingsAI.register_agent("unique-uuid", "my_agent")
+    class MyAgent(dumplingsAI.BaseAgent):
         prompt = "你是一个智能助手"
         api_provider = "https://api.example.com/v1/chat/completions"
         model_name = "qwen3.5-plus"
         api_key = os.getenv("API_KEY")
 
     # 获取并运行
-    agent = Dumplings.agent_list["my_agent"]
+    agent = dumplingsAI.agent_list["my_agent"]
     agent.conversation_with_tool("你好")
 
 [2. 注册自定义工具]
 
-    @Dumplings.tool_registry.register_tool(
+    @dumplingsAI.tool_registry.register_tool(
         allowed_agents=None,  # None 表示所有 Agent 可用
         name="get_weather",
         description="查询天气",
@@ -159,19 +159,19 @@ def help():
 [4. 查看可用资源]
 
     # 查看所有注册工具
-    Dumplings.tool_registry.list_tools()
+    dumplingsAI.tool_registry.list_tools()
 
     # 查看 Agent 可用工具
-    agent = Dumplings.agent_list["my_agent"]
+    agent = dumplingsAI.agent_list["my_agent"]
     agent.get_all_available_tools()
 
     # 查看所有 Agent
-    list(Dumplings.agent_list.keys())
+    list(dumplingsAI.agent_list.keys())
 
 [5. MCP 集成]
 
     # 注册 MCP 服务器工具
-    Dumplings.register_mcp_tools(
+    dumplingsAI.register_mcp_tools(
         server_path="path/to/mcp_server.py",
         allowed_agents=["my_agent"]
     )
@@ -180,17 +180,17 @@ def help():
 
     # 扫描并注册 Skills（支持 .claude/skills/ 目录）
     from pathlib import Path
-    Dumplings.skill_registry.scan_and_register([Path(".")])
+    dumplingsAI.skill_registry.scan_and_register([Path(".")])
 
     # 直接注册单个 Skill 目录
-    Dumplings.skill_registry.register_skill(Path(".claude/skills/my-skill"))
+    dumplingsAI.skill_registry.register_skill(Path(".claude/skills/my-skill"))
 
     # Agent 自动发现并使用 Skills（通过 tool_registry 桥接）
     # Skills 会出现在 Agent 的工具列表中，可通过 Function Calling 调用
 
     # 查询 Skills
-    Dumplings.skill_registry.list_skills()
-    Dumplings.skill_registry.search_skills("关键词")
+    dumplingsAI.skill_registry.list_skills()
+    dumplingsAI.skill_registry.search_skills("关键词")
 
 [配置说明]
 

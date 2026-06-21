@@ -1,9 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
-name = "Dumplings"
+name = "dumplingsAI"
 version = "0.1.1"
 description = "AI Company - 基于 LLM 的多智能体协作系统框架"
 readme = "README.md"
 requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "secret_dumplings" }]
+keywords = ["llm", "agent", "multi-agent", "mcp", "ai-framework"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     "beautifulsoup4>=4.14.2",
     "loguru>=0.7.3",
@@ -14,9 +34,24 @@ dependencies = [
     "watchdog>=3.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/Secret-Dumplings/dumplingsAI"
+Repository = "https://github.com/Secret-Dumplings/dumplingsAI.git"
+Issues = "https://github.com/Secret-Dumplings/dumplingsAI/issues"
+
 [tool.setuptools]
-py-modules = ["Agent_Base_", "Agent_list", "agent_tool", "logging_config", "mcp_bridge", "skill", "skill_bridge"]
+packages = ["dumplingsAI"]
+package-dir = {"dumplingsAI" = "."}
+include-package-data = true
 
 [[tool.uv.index]]
 url = "https://pypi.tuna.tsinghua.edu.cn/simple/"
 default = true
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]

@@ -3,20 +3,20 @@
 Agent Skills 开放标准实现
 ==========================
 
-基于 Claude Code 的 SKILL.md 规范，实现 Dumplings 的 Skills 系统。
+基于 Claude Code 的 SKILL.md 规范，实现 dumplingsAI 的 Skills 系统。
 
 每个 Skill 是一个目录，包含 SKILL.md 入口文件：
     - YAML frontmatter（--- 之间）：name, description, 调用控制等
     - Markdown 内容：Skill 的指令文本
 
 用法:
-    import Dumplings
+    import dumplingsAI
 
     # 扫描并注册 skills
-    Dumplings.skill_registry.scan_and_register([Path(".")])
+    dumplingsAI.skill_registry.scan_and_register([Path(".")])
 
     # 直接注册单个 skill 目录
-    Dumplings.skill_registry.register_skill(Path(".claude/skills/my-skill"))
+    dumplingsAI.skill_registry.register_skill(Path(".claude/skills/my-skill"))
 
     # Agent 自动发现并使用 skills（通过 tool_registry 桥接）
 """

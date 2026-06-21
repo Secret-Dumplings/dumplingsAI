@@ -4,14 +4,14 @@
 这个示例演示如何创建一个简单的 Agent 并与之对话。
 """
 import os
-import Dumplings
+import dumplingsAI
 from dotenv import load_dotenv
 
 load_dotenv()
 
 
-@Dumplings.register_agent("001", "simple_agent")
-class SimpleAgent(Dumplings.BaseAgent):
+@dumplingsAI.register_agent("001", "simple_agent")
+class SimpleAgent(dumplingsAI.BaseAgent):
     """一个简单的问答助手 Agent"""
     prompt = "你是一个名为汤圆 AI 的简单问答助手，友好地回答用户的问题"
     api_provider = "https://api.example.com/v1/chat/completions"
@@ -21,7 +21,7 @@ class SimpleAgent(Dumplings.BaseAgent):
 
 if __name__ == "__main__":
     # 获取 Agent 实例
-    agent = Dumplings.agent_list["simple_agent"]
+    agent = dumplingsAI.agent_list["simple_agent"]
 
     # 开始对话
     print("=== 简单 Agent 示例 ===")
