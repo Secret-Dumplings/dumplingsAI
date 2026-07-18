@@ -42,7 +42,7 @@ Apache License 2.0
 
 from .Agent_list import register_agent, agent_list
 from .Agent_Base_ import Agent as BaseAgent
-from .agent_tool import tool_registry
+from .agent_tool import tool_registry, builtin_tool
 
 # 从 mcp_bridge 导入 MCP 相关功能
 try:

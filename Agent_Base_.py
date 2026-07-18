@@ -1,6 +1,8 @@
 import json
 import os
 import platform
+from typing import Any
+
 import requests
 import re
 import sys
@@ -12,14 +14,14 @@ import threading
 
 try:
     from .logging_config import logger  # 配置日志
-    from .agent_tool import tool_registry
+    from .agent_tool import tool_registry, builtin_tool, _builtin_promote_overrides
 except:
     raise ImportError("不可单独执行")
 
 
 class Agent():
     """
-    所有具体 dumplingsAI 必须实现四个属性：
+    所有具体 Dumplings 必须实现四个属性：
         api_key
         api_provider
         model_name
@@ -32,6 +34,11 @@ class Agent():
     fc_model = True # 现在xml工具调用改为下位支持，如有bug修复优先级降低
     stream = True
     description = None
+
+    # ---------------- 类层级钩子：子类覆盖 @builtin_tool 方法时自动复用父类的 meta ----------------
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        _builtin_promote_overrides(cls)
     # ---------------- 通用构造 ----------------
     def __init__(self,new_load=True):
         self.uuid=self.__class__.uuid
@@ -46,23 +53,14 @@ class Agent():
         # 获取该 agent 有权限的所有工具信息
         tools_info = tool_registry.get_all_tools_info(self.uuid)
         tools_prompt = ""
-        tools_list = []
+        tools_list = list(tools_info.keys())
 
-        # 添加注册的工具
-        if tools_info:
-            tools_list.extend(tools_info.keys())
-
-        # 添加内置工具方法（如果存在且可调用）
-        builtin_tools = {
-            'ask_for_help': '请求其他Agent帮助，参数: agent_id(目标Agent的UUID或名称), message(请求内容)',
-            'list_agents': '列出所有可用的Agent及其UUID和名称',
-            'attempt_completion': '标记任务完成并退出，参数: report_content(汇报内容，可选)',
-            'reload': '重新加载你自己实现重新获取你可以使用的工具，你的新提示词'
-        }
-
-        for tool_name, tool_desc in builtin_tools.items():
-            if hasattr(self, tool_name) and callable(getattr(self, tool_name)):
-                tools_list.append(tool_name)
+        # 通过自动收集器获取 @builtin_tool 装饰的内置工具 schema
+        builtin_schemas = tool_registry.collect_builtin_tools(self)
+        builtin_names = {s["function"]["name"] for s in builtin_schemas}
+        for name in builtin_names:
+            if name not in tools_list:
+                tools_list.append(name)
 
         # 生成工具提示
         if tools_list:
@@ -70,10 +68,11 @@ class Agent():
             # 注册的工具
             for tool_name, tool_info in tools_info.items():
                 tools_prompt += f"- {tool_name}: {tool_info['description']}\n"
-            # 内置工具
-            for tool_name, tool_desc in builtin_tools.items():
-                if tool_name in tools_list and tool_name not in tools_info:
-                    tools_prompt += f"- {tool_name}: {tool_desc}\n"
+            # 内置工具（自动来自 @builtin_tool 装饰器）
+            for s in builtin_schemas:
+                n = s["function"]["name"]
+                if n in tools_list and n not in tools_info:
+                    tools_prompt += f"- {n}: {s['function']['description']}\n"
             if not self.fc_model:
                 tools_prompt += "在使用xml格式的工具时应采用（无参数调用）<工具名></工具名>（含参数调用）<工具名><参数1>放入你想传入的内容</参数1>...</工具名>"
 
@@ -192,55 +191,9 @@ class Agent():
             # Function Calling 模式
             tools_schema = tool_registry.get_all_tools_schema(self.uuid)
 
-            # 添加内置工具到 schema
-            builtin_tools_schema = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "ask_for_help",
-                        "description": "请求其他Agent帮助",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "agent_id": {"type": "string", "description": "目标Agent的UUID或名称"},
-                                "message": {"type": "string", "description": "请求内容"}
-                            },
-                            "required": ["agent_id", "message"]
-                        }
-                    }
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "list_agents",
-                        "description": "列出所有可用的Agent及其UUID和名称",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {},
-                            "required": []
-                        }
-                    }
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "attempt_completion",
-                        "description": "标记任务完成并退出",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "report_content": {"type": "string", "description": "汇报内容（可选）"}
-                            },
-                            "required": []
-                        }
-                    }
-                }
-            ]
-
-            # 合并内置工具和注册工具的schema
-            for builtin_tool in builtin_tools_schema:
-                if hasattr(self, builtin_tool['function']['name']) and callable(getattr(self, builtin_tool['function']['name'])):
-                    tools_schema.append(builtin_tool)
+            # 通过自动收集器添加内置工具（@builtin_tool 装饰）到 schema
+            for s in tool_registry.collect_builtin_tools(self):
+                tools_schema.append(s)
 
             # 添加 Skills 到 Function Calling schema
             try:
@@ -634,111 +587,75 @@ class Agent():
             print()
 
 
-    # ---------------- 内置工具 ----------------
+    # ---------------- 内置工具（@builtin_tool 装饰器自动从签名推导 schema）----------------
 
-    def reload(self):
+    @builtin_tool(
+        description="请求其他Agent帮助",
+        params={
+            "agent_id": "目标Agent的UUID或名称",
+            "message": "请求内容",
+        },
+    )
+    def ask_for_help(self, agent_id: str, message: str) -> str:
+        """请求另一个 Agent 协助完成子任务，并把对方的回复作为工具返回值返回。"""
+        try:
+            from Dumplings import agent_list
+            target = agent_list.get(agent_id)
+            if target is None:
+                return f"未找到 Agent：{agent_id}"
+            reply = target.conversation_with_tool(message)
+            return str(reply)
+        except Exception as e:
+            logger.error(f"ask_for_help 失败：{e}")
+            return f"协助请求失败：{e}"
+
+    @builtin_tool(
+        description="列出所有可用的Agent及其UUID和名称",
+    )
+    def list_agents(self) -> str:
+        """返回当前系统中所有已注册 Agent 的清单，便于发现协作对象。"""
+        from Dumplings import agent_list
+
+        unique_agents: dict = {}
+        for key, agent in agent_list.items():
+            uuid = getattr(agent, "uuid", None)
+            name = getattr(agent, "name", None)
+            desc = getattr(agent, "description", None)
+            if uuid and name and uuid not in unique_agents:
+                unique_agents[uuid] = {"uuid": uuid, "name": name, "description": desc}
+
+        if not unique_agents:
+            return "可用的Agent列表：（暂无）"
+
+        lines = []
+        for info in unique_agents.values():
+            lines.append(
+                f"- {info['name']} (UUID: {info['uuid']}) description: {info['description']}"
+            )
+        return "可用的Agent列表：" + "".join(lines)
+
+    @builtin_tool(
+        description="标记任务完成并退出",
+        params={"report_content": "汇报内容（可空）"},
+    )
+    def attempt_completion(self, report_content: str = "") -> str:
+        """告知框架当前任务已结束，传入汇报内容；该工具返回值即为整个任务的对外输出。"""
+        return report_content if report_content else "任务已完成"
+
+    @builtin_tool(
+        description="重新加载你自己：重新拉取当前可用的工具列表和Skills，重置系统提示词。",
+    )
+    def reload(self) -> str:
+        """重新构建内部状态（系统提示词 / 工具列表 / Skills），保留对话历史。"""
         self.__init__(new_load=False)
         return "successfully reloaded"
 
     def get_all_available_tools(self) -> list:
-        tools = []
+        tools: list[Any] = []
         tools_info = tool_registry.get_all_tools_info(self.uuid)
         if tools_info:
             tools.extend(tools_info.keys())
-        builtin_tools = ['ask_for_help', 'list_agents', 'attempt_completion']
-        for tool_name in builtin_tools:
-            if hasattr(self, tool_name) and callable(getattr(self, tool_name)):
-                tools.append(tool_name)
+        for s in tool_registry.collect_builtin_tools(self):
+            tools.append(s["function"]["name"])
         return tools
-
-    def ask_for_help(self, **kwargs):
-        """
-        工具方法：请求其他 Agent 帮助
-        参数可以通过 XML 或 Function Calling 传递
-        """
-        # 支持两种调用方式
-        agent_id = None
-        message = None
-
-        # Function Calling 方式（dict 参数）
-        if 'agent_id' in kwargs and 'message' in kwargs:
-            agent_id = kwargs['agent_id']
-            message = kwargs['message']
-        # XML 方式（字符串参数）
-        elif len(kwargs) == 1:
-            xml_block = list(kwargs.values())[0]
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(xml_block, "xml")
-            agent_id_tag = soup.find("agent_id")
-            message_tag = soup.find("message")
-            if agent_id_tag:
-                agent_id = agent_id_tag.text.strip()
-            if message_tag:
-                message = message_tag.text.strip()
-
-        if agent_id is None:
-            return "<ask_for_help> 缺少 agent_id 字段"
-        if message is None:
-            return "<ask_for_help> 缺少 message 字段"
-
-        try:
-            from dumplingsAI import agent_list
-            target_cls = agent_list[agent_id]
-        except KeyError as e:
-            return f"未找到 uuid/别名 {e}"
-
-        target_ins = target_cls
-        reply = target_ins.conversation_with_tool(message)
-        return reply
-
-    def list_agents(self, **kwargs):
-        """
-        工具方法：返回所有可用的Agent列表，包括它们的UUID和名称
-        """
-        from dumplingsAI import agent_list
-
-        # 获取所有唯一的Agent（避免UUID和名称重复）
-        unique_agents = {}
-        for key, agent in agent_list.items():
-            agent_uuid = getattr(agent, 'uuid', None)
-            agent_name = getattr(agent, 'name', None)
-            agent_description = getattr(agent, 'description', None)
-            if agent_uuid and agent_name:
-                if agent_uuid not in unique_agents:
-                    unique_agents[agent_uuid] = {
-                        'uuid': agent_uuid,
-                        'name': agent_name,
-                        "description": agent_description
-                    }
-
-        # 格式化为易读的字符串
-        agents_info = []
-        for agent_info in unique_agents.values():
-            agents_info.append(f"- {agent_info['name']} (UUID: {agent_info['uuid']}) description: {agent_info['description']}")
-
-        result = "可用的Agent列表：\n" + "\n".join(agents_info)
-        return result
-
-    def attempt_completion(self, **kwargs):
-        """
-        工具方法：标记任务完成并退出
-        """
-        # 支持两种调用方式
-        report_content = ""
-
-        # Function Calling 方式（dict 参数）
-        if 'report_content' in kwargs:
-            report_content = kwargs['report_content']
-        # XML 方式（字符串参数）
-        elif len(kwargs) == 1:
-            xml_block = list(kwargs.values())[0]
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(xml_block, "xml")
-            report_content_tag = soup.find("report_content")
-            if report_content_tag:
-                report_content = report_content_tag.text
-
-
-        # 返回完成报告，作为 tool 响应内容
-        return report_content if report_content else "任务已完成"
 
