@@ -1,16 +1,13 @@
-# This workflow will upload a Python Package to PyPI when a release is created
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python#publishing-to-package-registries
-
-# This workflow uses actions that are not certified by GitHub.
-# They are provided by a third-party and are governed by
-# separate terms of service, privacy policy, and support
-# documentation.
+# dumplingsAI 发布到 PyPI
+# 触发条件：① 发布 release；② 手动 workflow_dispatch（用于验证打包本身）
+# 用 Trusted Publishing（pypa/gh-action-pypi-publish），无需 API token。
 
 name: Upload Python Package
 
 on:
   release:
     types: [published]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -22,15 +19,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v3
         with:
-          python-version: "3.x"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
 
-      - name: Build release distributions
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Sync deps (含 build)
         run: |
-          # NOTE: put your own distribution build steps here.
-          python -m pip install build
-          python -m build
+          uv sync --group dev
+          uv pip install build twine
+
+      - name: Build sdist + wheel
+        run: uv run python -m build
 
       - name: Upload distributions
         uses: actions/upload-artifact@v4
@@ -45,17 +48,8 @@ jobs:
     permissions:
       # IMPORTANT: this permission is mandatory for trusted publishing
       id-token: write
-
-    # Dedicated environments with protections for publishing are strongly recommended.
-    # For more information, see: https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment#deployment-protection-rules
     environment:
       name: pypi
-      # OPTIONAL: uncomment and update to include your PyPI project URL in the deployment status:
-      # url: https://pypi.org/p/YOURPROJECT
-      #
-      # ALTERNATIVE: if your GitHub Release name is the PyPI project version string
-      # ALTERNATIVE: exactly, uncomment the following line instead:
-      # url: https://pypi.org/project/YOURPROJECT/${{ github.event.release.name }}
 
     steps:
       - name: Retrieve release distributions

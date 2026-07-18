@@ -20,7 +20,6 @@ Anthropic 协议 Agent 基类
 import json
 import os
 import platform
-import re
 import threading
 import time
 import uuid as _uuid
@@ -29,8 +28,8 @@ from typing import List, Optional
 import requests
 
 try:
+    from .agent_tool import _builtin_promote_overrides, builtin_tool, tool_registry
     from .logging_config import logger
-    from .agent_tool import tool_registry, builtin_tool, _builtin_promote_overrides
 except ImportError:
     raise ImportError("不可单独执行，不可单独 import")
 

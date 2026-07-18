@@ -1,21 +1,19 @@
 import json
 import os
 import platform
+import re
+import threading
+import time
+import uuid
 from typing import Any
 
 import requests
-import re
-import sys
-import uuid
-import time
-from abc import ABC, abstractmethod
 from bs4 import BeautifulSoup
-import threading
 
 try:
+    from .agent_tool import _builtin_promote_overrides, builtin_tool, tool_registry
     from .logging_config import logger  # 配置日志
-    from .agent_tool import tool_registry, builtin_tool, _builtin_promote_overrides
-except:
+except Exception:
     raise ImportError("不可单独执行")
 
 
@@ -506,8 +504,8 @@ class Agent():
             for i in tool_results:
                 try:
                     work_history.append({"role": "system", "content": f"{tool_names[n]} results: {i}"})
-                    n+=1
-                except:
+                    n += 1
+                except Exception:
                     break
             logger.debug(f"对话历史长度：{len(self.history)}")
             return self.conversation_with_tool(tool=True)

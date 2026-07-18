@@ -26,11 +26,10 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
-from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
 
 from .logging_config import logger
-
 
 # ==================== Skill 类 ====================
 
@@ -411,7 +410,7 @@ class SkillRegistry:
         if skill:
             skill.reload()
             # 更新 tool_registry 中的描述
-            from .skill_bridge import unregister_skill_from_tool, register_skill_as_tool
+            from .skill_bridge import register_skill_as_tool, unregister_skill_from_tool
             unregister_skill_from_tool(name)
             register_skill_as_tool(skill)
 

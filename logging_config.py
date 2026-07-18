@@ -26,9 +26,9 @@
 """
 import os
 import sys
-from loguru import logger
 from typing import Optional
 
+from loguru import logger
 
 # 移除默认的默认处理器（避免重复）
 logger.remove()

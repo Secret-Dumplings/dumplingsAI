@@ -18,8 +18,8 @@ Skill Bridge - 将 Skill 注册为 tool_registry 中的工具
         └── 创建 MCP 包装器
         └── tool_registry.register_tool()(wrapper)
 """
-from .logging_config import logger
 from .agent_tool import tool_registry
+from .logging_config import logger
 
 
 def _create_skill_proxy(skill):

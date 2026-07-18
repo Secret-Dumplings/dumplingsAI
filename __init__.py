@@ -40,30 +40,30 @@ dumplingsAI - 多智能体协作框架
 Apache License 2.0
 """
 
-from .Agent_list import register_agent, agent_list
 from .Agent_Base_ import Agent as BaseAgent
-from .agent_tool import tool_registry, builtin_tool
+from .Agent_list import agent_list, register_agent
+from .agent_tool import builtin_tool, tool_registry  # noqa: F401  (re-exported)
 
 # 从 mcp_bridge 导入 MCP 相关功能
 try:
     from .mcp_bridge import (
-        register_mcp_tools,
-        register_mcp_tools_async,
-        close_mcp_session,
-        close_mcp_session_sync,
         close_all_mcp_sessions,
         close_all_mcp_sessions_sync,
+        close_mcp_session,
+        close_mcp_session_sync,
         get_session_info,
+        mcp_session_context,
+        register_mcp_tools,
+        register_mcp_tools_async,
         start_health_check,
         stop_health_check,
-        mcp_session_context,
     )
 except ImportError:
     # mcp 未安装时提供兼容性
     pass
 
 # 从 skill 导入 Skill 相关功能
-from .skill import skill_registry, Skill
+from .skill import Skill, skill_registry
 from .skill_bridge import register_skill_as_tool, unregister_skill_from_tool
 
 __version__ = "0.1.0"

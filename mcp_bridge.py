@@ -12,13 +12,14 @@ MCP Bridge - 将 MCP 服务器工具转换为标准工具（非 XML）
 import asyncio
 import os
 import time
-from typing import Optional, Dict, Any, List
+from contextlib import asynccontextmanager
+from typing import Any, Dict, Optional
+
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
-from contextlib import asynccontextmanager
+
 from .agent_tool import tool_registry
 from .logging_config import logger
-
 
 # ==================== 全局会话池 ====================
 MCP_SESSION_POOL: Dict[str, Dict[str, Any]] = {}
