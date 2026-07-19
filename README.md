@@ -1,115 +1,101 @@
 # dumplingsAI
 
-> dumplingsAI开创AI新架构
+> 一个轻量、模块化的多智能体协作框架，让 LLM 像"公司团队"一样分工完成任务。
 
-## 目录
-
-- [简介](#简介)
-- [安装](#安装)
-- [快速开始](#快速开始)
-- [核心概念](#核心概念)
-- [API 参考](#api-参考)
-- [示例](#示例)
-- [常见问题](#常见问题)
+[![PyPI](https://img.shields.io/pypi/v/dumplingsAI.svg)](https://pypi.org/project/dumplingsAI/)
+[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
+[![License](https://img.shields.io/badge/License-Apache_2.0-green.svg)](https://opensource.org/licenses/Apache-2.0)
+[![CI](https://github.com/Secret-Dumplings/dumplingsAI/actions/workflows/python-package.yml/badge.svg)](https://github.com/Secret-Dumplings/dumplingsAI/actions)
 
 ---
 
-## 简介
+## 特性一览
 
-dumplingsAI 是一个轻量级的多智能体协作框架，支持：
-
-- **多智能体注册与管理** - 通过装饰器快速注册 Agent
-- **工具注册系统** - 将函数注册为 Agent 可调用的工具
-- **MCP 协议支持** - 兼容 Model Context Protocol，可接入外部 MCP 服务器
-- **双模式工具调用** - 支持 Function Calling 和 XML 两种调用方式
-- **Agent 间协作** - Agent 可通过内置工具相互请求帮助
-
-### 核心特性
-
-| 特性 | 说明 |
-|------|------|
-| 装饰器注册 | 使用 `@register_agent` 快速定义 Agent |
-| 工具权限控制 | 可为每个工具指定允许使用的 Agent |
-| 内置工具 | `ask_for_help`、`list_agents`、`attempt_completion`、`reload` |
-| 日志系统 | 基于 loguru 的统一日志配置 |
-| 会话池管理 | MCP 会话自动复用与健康检查 |
+- **多协议 Agent**：`BaseAgent`（OpenAI-compatible Chat Completions）+ `AnthropicAgent`（Anthropic Messages API），同一份 `agent_list` 共用
+- **声明式注册**：`@register_agent` + `@tool_registry.register_tool`，单行注册
+- **统一内置 schema**：`@builtin_tool` 装饰器从签名+类型注解自动推导，零硬编码
+- **跨 Agent 协作**：`ask_for_help` / `list_agents` / `attempt_completion` / `reload` 四个内建工具
+- **MCP 协议桥接**：标准 stdio MCP 服务器自动接入
+- **Skill 开放标准**：兼容 `.claude/skills/` 目录，热加载
+- **细粒度权限 ACL**：每个工具可指定允许使用的 Agent 列表
+- **钩子系统**：`register_tool_hook(event_type, ...)` 监听工具调用前/后/错误
 
 ---
 
 ## 安装
 
-### 使用 uv（推荐）
-
 ```bash
-uv add git+https://github.com/Secret-Dumplings/dumplingsAI.git
+pip install dumplingsAI
 ```
 
-### 依赖说明
+需要 Python 3.10+。可选功能：
 
-dumplingsAI 的核心依赖：
-
-```toml
-dependencies = [
-    "beautifulsoup4>=4.14.2",   # XML/HTML 解析
-    "loguru>=0.7.3",            # 日志系统
-    "lxml>=6.0.2",              # XML 解析器后端
-    "mcp>=1.14.1",              # MCP 协议支持
-    "requests>=2.32.5",         # HTTP 请求
-]
+```bash
+pip install dumplingsAI[anthropic]  # Anthropic Agent 需要的 requests 已内置，无需额外
+pip install dumplingsAI[async]      # Phase 3 上线后启用
 ```
 
 ---
 
 ## 快速开始
 
-### 1. 配置环境变量
-
-在项目根目录创建 `.env` 文件：
+### 1. 准备 API Key
 
 ```bash
-API_KEY=your_api_key_here
+export API_KEY="sk-..."                    # OpenAI 协议
+export ANTHROPIC_API_KEY="sk-ant-..."      # Anthropic 协议
 ```
 
-### 2. 创建第一个 Agent
+### 2. 第一个 Agent
 
 ```python
 import os
 import dumplingsAI
-from dotenv import load_dotenv
 
-load_dotenv()
+@dumplingsAI.tool_registry.register_tool(
+    allowed_agents=["weather"],   # None 或 [] 表示所有 Agent 可用
+    description="查询某城市当前天气",
+    name="get_weather",
+    parameters={
+        "type": "object",
+        "properties": {"city": {"type": "string", "description": "城市名"}},
+        "required": ["city"],
+    },
+)
+def get_weather(city: str) -> str:
+    return f"{city}今天晴，25°C"
 
-@dumplingsAI.register_agent("unique-uuid-here", "my_agent")
-class MyAgent(dumplingsAI.BaseAgent):
-    """Agent 的简介，描述其职责和能力"""
-    prompt = "你是一个名为汤圆 AI 的智能助手"
+@dumplingsAI.register_agent("agent-uuid-1", "weather", "天气小助手")
+class WeatherAgent(dumplingsAI.BaseAgent):
+    """走 OpenAI-compatible Chat Completions 的天气 Agent。"""
+    prompt = "你是天气助手，使用 get_weather 工具查询天气。"
     api_provider = "https://api.example.com/v1/chat/completions"
     model_name = "qwen3.5-plus"
     api_key = os.getenv("API_KEY")
-    fc_model = True  # 使用 Function Calling 模式
 
-# 运行
-agent = dumplingsAI.agent_list["my_agent"]
-agent.conversation_with_tool("你好，请介绍一下自己")
+if __name__ == "__main__":
+    agent = dumplingsAI.agent_list["weather"]
+    agent.conversation_with_tool("北京今天天气怎么样？")
 ```
 
-### 3. 注册自定义工具
+### 3. 多协议混用
 
 ```python
-@dumplingsAI.tool_registry.register_tool(
-    allowed_agents=["my_agent"],  # 允许使用的 Agent
-    name="get_weather",
-    description="查询天气信息",
-    parameters={
-        "type": "object",
-        "properties": {
-            "city": {"type": "string", "description": "城市名称"}
-        },
-        "required": ["city"]
-    }
+from dumplingsAI.anthropic_agent import AnthropicAgent
+
+@dumplingsAI.register_agent("agent-uuid-2", "reviewer", "走 Claude 协议的评审 Agent")
+class ReviewerAgent(AnthropicAgent):
+    prompt = "你是评审助手。完成工作后用 attempt_completion 汇报。"
+    api_provider = "https://api.anthropic.com"
+    model_name = "claude-3-5-sonnet-latest"
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+
+# 同一份 agent_list，OpenAI / Anthropic Agent 互通
+weather = dumplingsAI.agent_list["weather"]
+reviewer = dumplingsAI.agent_list["reviewer"]
+reviewer.conversation_with_tool(
+    f"刚才 weather Agent 说北京晴 25°C，请评审"
 )
-def get_weather(city: str) -> str:
-    return f"{city}今天晴朗，温度 25°C"
 ```
 
 ---
@@ -118,324 +104,168 @@ def get_weather(city: str) -> str:
 
 ### Agent 注册
 
-使用 `@register_agent(uuid, name)` 装饰器注册 Agent：
+`@register_agent(uuid, name, description=None)` 是双键装饰器：UUID 用于程序化访问，名称用于人类可读。
 
 ```python
-@dumplingsAI.register_agent("uuid-here", "agent_name")
+@dumplingsAI.register_agent("my-uuid", "my_agent", "一句话说明 Agent 用途")
 class MyAgent(dumplingsAI.BaseAgent):
-    prompt = "你的系统提示词"
-    api_provider = "API 端点"
-    model_name = "模型名称"
-    api_key = os.getenv("API_KEY")
+    prompt = "..."                # 系统提示词
+    api_provider = "..."          # API 端点
+    model_name = "..."            # 模型名
+    api_key = "..."               # 鉴权
+    fc_model = True               # 是否启用 Function Calling
+    stream = True                 # 是否流式响应
+    timeout = 60                  # 单请求超时（Phase 1+）
+    max_retries = 2               # 最大重试次数（Phase 1+）
 ```
-
-**必填属性：**
-
-| 属性 | 说明 |
-|------|------|
-| `prompt` | Agent 的系统提示词 |
-| `api_provider` | LLM API 端点 URL |
-| `model_name` | 使用的模型名称 |
-| `api_key` | API 密钥 |
-
-**可选属性：**
-
-| 属性 | 默认值 | 说明 |
-|------|--------|------|
-| `fc_model` | `True` | 是否使用 Function Calling 模式 |
-| `stream` | `True` | 是否使用流式响应 |
 
 ### 工具注册
 
-使用 `@tool_registry.register_tool()` 装饰器注册工具：
+两种写法等价：
 
 ```python
+# 写法 1：装饰器 + JSON Schema（传统）
 @dumplingsAI.tool_registry.register_tool(
-    allowed_agents=None,  # None 表示所有 Agent 可用
-    name="tool_name",
-    description="工具描述",
+    allowed_agents=["my_agent"],
+    name="add",
+    description="求两数之和",
     parameters={
         "type": "object",
         "properties": {
-            "param1": {"type": "string", "description": "参数说明"}
+            "a": {"type": "number"},
+            "b": {"type": "number"},
         },
-        "required": ["param1"]
-    }
+        "required": ["a", "b"],
+    },
 )
-def my_tool(param1: str) -> str:
-    return f"结果：{param1}"
+def add(a: float, b: float) -> float:
+    return a + b
 ```
 
-### 工具调用模式
+```python
+# 写法 2：内置工具的 schema 自动从签名/类型注解推导
+from dumplingsAI import builtin_tool
 
-dumplingsAI 支持两种工具调用模式：
+@builtin_tool(
+    description="求两数之和",
+    params={"a": "第一个加数", "b": "第二个加数"},
+)
+def add(self, a: float, b: float) -> float:
+    return a + b
+```
 
-#### Function Calling 模式（推荐）
+### Agent 间的协作
+
+每个 Agent 自带 4 个内建工具：
+
+| 工具 | 用途 |
+|------|------|
+| `ask_for_help(agent_id, message)` | 委派任务给其他 Agent |
+| `list_agents()` | 列出所有可协作的 Agent |
+| `attempt_completion(report_content)` | 标记任务完成 |
+| `reload()` | 重新拉取工具/技能列表 |
+
+无需手写 prompt 教 LLM 怎么调——框架已把工具描述注入到 system prompt 里。
+
+### 钩子
 
 ```python
 class MyAgent(dumplingsAI.BaseAgent):
-    fc_model = True  # 启用 Function Calling
+    def __init__(self):
+        super().__init__()
+        self.register_tool_hook(self._audit)
+
+    def _audit(self, event_type, tool_name, tool_args, tool_result, task_id):
+        # event_type: 'before' | 'after' | 'error'
+        if event_type == 'error':
+            logger.error(f"工具 {tool_name} 失败：{tool_result}")
 ```
 
-Agent 会以标准 function calling 格式调用工具。
-
-#### XML 模式
+### MCP 桥接
 
 ```python
-class MyAgent(dumplingsAI.BaseAgent):
-    fc_model = False  # 使用 XML 模式
-```
+import dumplingsAI
 
-Agent 使用 XML 标签调用工具：
-
-```xml
-<get_weather><city>北京</city></get_weather>
+# 自动拉起 MCP 服务器并注册其所有工具
+dumplingsAI.register_mcp_tools(
+    server_path="mcp/weather_mcp/weather_server.py",
+    allowed_agents=["weather"],
+)
 ```
 
 ---
 
 ## API 参考
 
-### 模块导出
-
 ```python
 from dumplingsAI import (
+    BaseAgent,           # OpenAI 协议 Agent 基类
+    builtin_tool,        # 内置工具装饰器
     register_agent,      # Agent 注册装饰器
     tool_registry,       # 工具注册器实例
-    BaseAgent,           # Agent 基类
-    agent_list,          # 已注册的 Agent 字典
+    agent_list,          # 已注册 Agent 字典
+    register_mcp_tools,  # MCP 工具注册
+    skill_registry,      # Skill 注册表
+    # AnthropicAgent 走子模块路径：
+    # from dumplingsAI.anthropic_agent import AnthropicAgent
 )
 ```
 
-### register_agent(uuid, name)
-
-类装饰器，注册一个 Agent 类。
-
-```python
-@dumplingsAI.register_agent("uuid-123", "helper_bot")
-class HelperAgent(dumplingsAI.BaseAgent):
-    ...
-```
-
-### tool_registry.register_tool(...)
-
-注册工具的装饰器。
-
-**参数：**
-
-| 参数 | 类型 | 说明 |
-|------|------|------|
-| `allowed_agents` | `str`, `list`, `None` | 允许使用的 Agent UUID/名称列表 |
-| `name` | `str` | 工具名称（可选，默认使用函数名） |
-| `description` | `str` | 工具描述 |
-| `parameters` | `dict` | OpenAI Function Calling schema |
-
-### BaseAgent 类
-
-所有 Agent 的基类，提供核心功能。
-
-**主要方法：**
-
-| 方法 | 说明 |
-|------|------|
-| `conversation_with_tool(messages, tool, images)` | 进行对话，支持工具调用 |
-| `pack(content)` | 打包输出内容 |
-| `out(content)` | 输出处理方法（可重写） |
-| `reload()` | 重新加载 Agent 配置 |
-| `ask_for_help(agent_id, message)` | 请求其他 Agent 帮助 |
-| `list_agents()` | 列出所有可用 Agent |
-| `attempt_completion(report_content)` | 标记任务完成 |
-
-### agent_list
-
-全局字典，存储所有已注册的 Agent。
-
-```python
-# 通过 UUID 获取
-agent = dumplingsAI.agent_list["uuid-123"]
-
-# 通过名称获取
-agent = dumplingsAI.agent_list["agent_name"]
-```
+详见 [`docs/PROJECT.md`](https://github.com/Secret-Dumplings/AI_Company/blob/main/docs/PROJECT.md)（仓库内的 SDK 差距分析 + 完整设计文档）。
 
 ---
 
 ## 示例
 
-### 示例 1：单 Agent 基础用法
+仓库自带完整示例：
 
-```python
-import os
-import dumplingsAI
-from dotenv import load_dotenv
+- `examples/basic_agent/agent_example.py` — 单 Agent 基础用法
+- `examples/multi_agent/ask_for_help_example.py` — 多 Agent 协作
+- `examples/anthropic_agent/agent_example.py` — Anthropic 协议示例
+- `tests/test_placeholder.py` — 冒烟测试（验证包能 import、装饰器工作）
 
-load_dotenv()
+运行：
 
-@dumplingsAI.register_agent("001", "simple_agent")
-class SimpleAgent(dumplingsAI.BaseAgent):
-    prompt = "你是一个简单的问答助手"
-    api_provider = "https://api.example.com/v1/chat/completions"
-    model_name = "qwen3.5-plus"
-    api_key = os.getenv("API_KEY")
-
-if __name__ == "__main__":
-    agent = dumplingsAI.agent_list["simple_agent"]
-    agent.conversation_with_tool("你好")
-```
-
-### 示例 2：带自定义工具的 Agent
-
-```python
-import os
-import dumplingsAI
-from dotenv import load_dotenv
-
-load_dotenv()
-
-# 注册工具
-@dumplingsAI.tool_registry.register_tool(
-    allowed_agents=["calculator"],
-    name="add",
-    description="计算两个数的和",
-    parameters={
-        "type": "object",
-        "properties": {
-            "a": {"type": "number", "description": "第一个数"},
-            "b": {"type": "number", "description": "第二个数"}
-        },
-        "required": ["a", "b"]
-    }
-)
-def add(a: float, b: float) -> str:
-    return str(a + b)
-
-# 注册 Agent
-@dumplingsAI.register_agent("002", "calculator")
-class CalculatorAgent(dumplingsAI.BaseAgent):
-    prompt = "你是一个计算器，可以执行数学运算"
-    api_provider = "https://api.example.com/v1/chat/completions"
-    model_name = "qwen3.5-plus"
-    api_key = os.getenv("API_KEY")
-
-if __name__ == "__main__":
-    agent = dumplingsAI.agent_list["calculator"]
-    agent.conversation_with_tool("请帮我计算 123 + 456")
-```
-
-### 示例 3：多 Agent 协作
-
-```python
-import os
-import dumplingsAI
-from dotenv import load_dotenv
-
-load_dotenv()
-
-# 时间查询 Agent
-@dumplingsAI.register_agent("time-uuid", "time_agent")
-class TimeAgent(dumplingsAI.BaseAgent):
-    prompt = "你是时间管理者，负责提供当前时间"
-    api_provider = "https://api.example.com/v1/chat/completions"
-    model_name = "qwen3.5-plus"
-    api_key = os.getenv("API_KEY")
-
-# 调度 Agent
-@dumplingsAI.register_agent("schedule-uuid", "scheduling_agent")
-class SchedulingAgent(dumplingsAI.BaseAgent):
-    prompt = "你是一个调度助手，可以请求其他 Agent 帮助"
-    api_provider = "https://api.example.com/v1/chat/completions"
-    model_name = "qwen3.5-plus"
-    api_key = os.getenv("API_KEY")
-
-if __name__ == "__main__":
-    scheduler = dumplingsAI.agent_list["scheduling_agent"]
-    # 请求时间 Agent 帮助
-    scheduler.conversation_with_tool(
-        "请请求 time_agent 帮你查看当前时间"
-    )
-```
-
-### 示例 4：注册 MCP 服务器工具
-
-```python
-import dumplingsAI
-
-# 注册 MCP 服务器的所有工具
-dumplingsAI.register_mcp_tools(
-    server_path="path/to/mcp_server.py",
-    register_resources=True,
-    allowed_agents=["my_agent"]
-)
-```
-
-### 示例 5：自定义输出处理
-
-```python
-@dumplingsAI.register_agent("003", "custom_agent")
-class CustomAgent(dumplingsAI.BaseAgent):
-    prompt = "你是一个自定义输出的 Agent"
-    api_provider = "https://api.example.com/v1/chat/completions"
-    model_name = "qwen3.5-plus"
-    api_key = os.getenv("API_KEY")
-
-    def out(self, content):
-        """重写输出方法，实现自定义处理"""
-        if content.get("tool_name"):
-            print(f"🔧 调用工具：{content.get('tool_name')}")
-            return
-        if content.get("task"):
-            print("\n✅ 任务完成")
-        else:
-            print(content.get("message"), end="")
+```bash
+git clone https://github.com/Secret-Dumplings/AI_Company.git
+cd AI_Company
+uv sync
+uv run python examples/basic_agent/agent_example.py
 ```
 
 ---
 
-## 常见问题
+## 路线图
 
-### Q: 如何查看已注册的工具？
+- ✅ Phase 0 — 注册式多 Agent 框架、工具 ACL、MCP 桥接、Skill 集成
+- ✅ Phase 0.5 — `@builtin_tool` 装饰器统一 schema 来源
+- ✅ Phase 0.6 — `AnthropicAgent` 与 OpenAI 协议共享 `agent_list`
+- ✅ Phase 1 — `http_utils`（retry/timeout）+ 错误类型体系 + `tiktoken` 计数
+- ✅ Phase 2 — Pydantic 结构化输出（`params_model`）
+- ✅ Phase 3 — `httpx` 异步支持（`aconversation_with_tool`）
+- ✅ Phase 4 — 全面 Pydantic 模型化
 
-```python
-# 查看所有注册工具
-print(dumplingsAI.tool_registry.list_tools())
+具体计划见 `docs/PROJECT.md` 附录 B。
 
-# 查看 Agent 可用的工具
-agent = dumplingsAI.agent_list["my_agent"]
-tools = agent.get_all_available_tools()
-print(tools)
+---
+
+## 开发与测试
+
+```bash
+git clone https://github.com/Secret-Dumplings/AI_Company.git
+cd AI_Company
+uv sync --group dev
+uv run pytest Dumplings/tests/ -v
+uv run ruff check Dumplings/
 ```
 
-### Q: 如何查看会话信息？
+CI 在 `python-package.yml`，自动跑 ruff + pytest on Python 3.10 / 3.11 / 3.12。
 
-```python
-# 查看 MCP 会话信息
-from dumplingsAI.mcp_bridge import get_session_info
-print(get_session_info())
-```
+---
 
-### Q: 如何关闭所有 MCP 会话？
+## 贡献
 
-```python
-from dumplingsAI.mcp_bridge import close_all_mcp_sessions_sync
-close_all_mcp_sessions_sync()
-```
-
-### Q: Function Calling 和 XML 模式有什么区别？
-
-| 模式 | 优点 | 适用场景 |
-|------|------|----------|
-| Function Calling | 标准化、参数解析准确 | 支持 function calling 的模型 |
-| XML | 兼容性好、易于调试 | 不支持 function calling 的模型 |
-
-### Q: 如何让 Agent 支持多模态？
-
-```python
-# 传递图片（base64 或 URL）
-agent.conversation_with_tool(
-    messages="这张图片里有什么？",
-    images=["data:image/png;base64,..."]  # 或图片 URL
-)
-```
+欢迎 PR / Issue。提交前请跑 `uv run ruff check` + `uv run pytest`。
 
 ---
 
@@ -443,8 +273,9 @@ agent.conversation_with_tool(
 
 Apache License 2.0
 
-Copyright [2025/11/24] [secret_dumplings]
+Copyright 2025-2026 [Secret Dumplings](https://github.com/Secret-Dumplings)
 
+```
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
