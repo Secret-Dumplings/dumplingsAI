@@ -595,14 +595,35 @@ class Agent():
         },
     )
     def ask_for_help(self, agent_id: str, message: str) -> str:
-        """请求另一个 Agent 协助完成子任务，并把对方的回复作为工具返回值返回。"""
+        """请求另一个 Agent 协助完成子任务，并把对方的回复作为工具返回值返回。
+
+        走全局队列：避免递归栈过深 / 循环调用自动超时。
+        - 循环检测：若 target 在当前调用链里直接拒绝
+        - 深度限制：链长达到 max_depth 也直接拒绝
+        - 串行执行：worker pool 中每个 worker 一次只跑一个 Job
+        """
+        from .agent_queue import get_call_chain, get_default_queue
+
         try:
             from Dumplings import agent_list
+
             target = agent_list.get(agent_id)
             if target is None:
+                # 接受 UUID 或 name 两种引用
+                target = next(
+                    (a for a in agent_list.values() if a.name == agent_id),
+                    None,
+                )
+            if target is None:
                 return f"未找到 Agent：{agent_id}"
-            reply = target.conversation_with_tool(message)
-            return str(reply)
+
+            chain = get_call_chain()
+            queue = get_default_queue()
+            return queue.submit(
+                target_uuid=target.uuid,
+                call_fn=lambda: str(target.conversation_with_tool(message)),
+                caller_chain=chain,
+            )
         except Exception as e:
             logger.error(f"ask_for_help 失败：{e}")
             return f"协助请求失败：{e}"
@@ -615,12 +636,16 @@ class Agent():
         from Dumplings import agent_list
 
         unique_agents: dict = {}
-        for key, agent in agent_list.items():
-            uuid = getattr(agent, "uuid", None)
-            name = getattr(agent, "name", None)
-            desc = getattr(agent, "description", None)
-            if uuid and name and uuid not in unique_agents:
-                unique_agents[uuid] = {"uuid": uuid, "name": name, "description": desc}
+        for _key, inst in agent_list.items():
+            inst_uuid = getattr(inst, "uuid", None)
+            inst_name = getattr(inst, "name", None)
+            inst_desc = getattr(inst, "description", None)
+            if inst_uuid and inst_name and inst_uuid not in unique_agents:
+                unique_agents[inst_uuid] = {
+                    "uuid": inst_uuid,
+                    "name": inst_name,
+                    "description": inst_desc,
+                }
 
         if not unique_agents:
             return "可用的Agent列表：（暂无）"
@@ -656,4 +681,6 @@ class Agent():
         for s in tool_registry.collect_builtin_tools(self):
             tools.append(s["function"]["name"])
         return tools
+
+
 

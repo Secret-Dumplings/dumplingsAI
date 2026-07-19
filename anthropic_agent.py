@@ -557,13 +557,32 @@ class AnthropicAgent:
         },
     )
     def ask_for_help(self, agent_id: str, message: str) -> str:
-        """请求另一个 Agent 协助（支持 UUID 或名称）"""
+        """请求另一个 Agent 协助（支持 UUID 或名称）
+
+        走全局队列：避免递归栈过深 / 循环调用自动超时。
+        - 循环检测：若 target 在当前调用链里直接拒绝
+        - 深度限制：链长达到 max_depth 也直接拒绝
+        - 串行执行：worker pool 中每个 worker 一次只跑一个 Job
+        """
         from .Agent_list import agent_list
+        from .agent_queue import get_call_chain, get_default_queue
+
         target = agent_list.get(agent_id)
+        if target is None:
+            target = next(
+                (a for a in agent_list.values() if a.name == agent_id),
+                None,
+            )
         if target is None:
             return f"未找到 Agent：{agent_id}"
         try:
-            return str(target.conversation_with_tool(message))
+            chain = get_call_chain()
+            queue = get_default_queue()
+            return queue.submit(
+                target_uuid=target.uuid,
+                call_fn=lambda: str(target.conversation_with_tool(message)),
+                caller_chain=chain,
+            )
         except Exception as e:
             logger.error(f"ask_for_help 失败：{e}")
             return f"协助请求失败：{e}"
