@@ -93,7 +93,8 @@ def _builtin_derive_description(func, override: Optional[str]) -> str:
 
 def builtin_tool(name: Optional[str] = None,
                  description: Optional[str] = None,
-                 params: Optional[dict] = None):
+                 params: Optional[dict] = None,
+                 params_model: Optional[type] = None):
     """
     把一个方法标记为 Agent 的内置工具，并自动派生其 OpenAI function schema。
 
@@ -101,6 +102,10 @@ def builtin_tool(name: Optional[str] = None,
         name        : 工具名（默认 = 函数名）
         description : 工具描述（默认 = 函数 docstring 第一段）
         params      : 手工指定参数描述，形如 ``{"param_name": "中文说明"}``
+        params_model: Pydantic ``BaseModel`` 子类（与 ``params`` 二选一）。
+                      传入时用 ``model.model_json_schema()`` 作为 input_schema，
+                      并在工具调用时自动 ``model_validate(arguments)``。
+                      校验失败时把错误回灌给 LLM 让它重试。
                       未指定的参数：先尝试从 docstring 解析 Google/Sphinx 风格，
                       再退回 ``"<name> 参数"``
 
@@ -119,37 +124,97 @@ def builtin_tool(name: Optional[str] = None,
             def ask_for_help(self, agent_id: str, message: str) -> str:
                 '''请求另一个Agent协作'''
                 ...
+
+    Pydantic 写法::
+
+        from pydantic import BaseModel, Field
+        class AskArgs(BaseModel):
+            agent_id: str = Field(..., description="目标Agent的UUID或名称")
+            message: str = Field(..., description="请求内容")
+
+        @builtin_tool(description="请求其他Agent帮助", params_model=AskArgs)
+        def ask_for_help(self, agent_id: str, message: str) -> str:
+            ...
     """
     user_params = dict(params or {})
 
     def decorator(func):
         tool_name = name or func.__name__
-        sig = inspect.signature(func)
 
-        properties = {}
-        required = []
-        for pname, param in sig.parameters.items():
-            if pname == "self":
-                continue
-            ptype = _builtin_resolve_json_type(param.annotation)
-            pdesc = _builtin_derive_param_desc(func, pname, user_params.get(pname))
-            properties[pname] = {"type": ptype, "description": pdesc}
-            if param.default is inspect.Parameter.empty:
-                required.append(pname)
+        # Pydantic 模型：直接拿 model_json_schema() 当 input_schema，
+        # 同时把 Pydantic 类记到 meta 上，工具调用时做 model_validate。
+        if params_model is not None:
+            try:
+                from pydantic import BaseModel
+            except ImportError as e:
+                raise ImportError(
+                    "params_model 需要 pydantic>=2.6（已在 pyproject 中声明）。"
+                ) from e
+            if not (isinstance(params_model, type) and issubclass(params_model, BaseModel)):
+                raise TypeError(
+                    f"params_model 必须是 pydantic.BaseModel 子类，得到 {params_model!r}"
+                )
+            input_schema = params_model.model_json_schema()
+        else:
+            input_schema = None
+            # 从签名推导
+            sig = inspect.signature(func)
+            properties = {}
+            required = []
+            for pname, param in sig.parameters.items():
+                if pname == "self":
+                    continue
+                ptype = _builtin_resolve_json_type(param.annotation)
+                pdesc = _builtin_derive_param_desc(func, pname, user_params.get(pname))
+                properties[pname] = {"type": ptype, "description": pdesc}
+                if param.default is inspect.Parameter.empty:
+                    required.append(pname)
+            input_schema = {
+                "type": "object",
+                "properties": properties,
+                "required": required,
+            }
 
         func.__builtin_tool_name__ = tool_name
         func.__builtin_tool_meta__ = {
             "name": tool_name,
             "description": _builtin_derive_description(func, description),
-            "input_schema": {
-                "type": "object",
-                "properties": properties,
-                "required": required,
-            },
+            "params_model": params_model,
+            "input_schema": input_schema,
         }
         return func
 
     return decorator
+
+
+def _validate_tool_args_for(instance, tool_name: str, args: dict) -> dict:
+    """
+    工具调用前的 Pydantic 校验（如果 ``@builtin_tool`` 提供了 ``params_model``）。
+
+    流程：
+    - 拿 ``tool_registry.collect_builtin_tools(instance)`` 找到对应方法的 meta
+    - meta["function"] 是 dict，里头有 ``params_model``（BaseModel 子类）
+    - 用 ``model_validate(args)`` 校验；失败时抛 ``ValueError`` 把错误
+      返给 LLM 让它重试
+    - 校验成功后 ``model.model_dump()`` 拿干净的 kwargs 调 ``tool_func(**args)``
+
+    没装 pydantic 或方法没声明 params_model 时直接原样返回。
+    """
+    builtin_metas = tool_registry.collect_builtin_tools(instance)
+    meta = next(
+        (m for m in builtin_metas if m["function"]["name"] == tool_name),
+        None,
+    )
+    if meta is None:
+        return args
+    params_model = meta["function"].get("params_model")
+    if params_model is None:
+        return args
+    try:
+        model = params_model.model_validate(args)
+    except Exception as e:
+        raise ValueError(f"params validation failed ({tool_name}): {e}") from e
+    return model.model_dump()
 
 
 def _builtin_promote_overrides(cls) -> None:
@@ -361,13 +426,17 @@ class tool:
                     continue
                 meta = getattr(attr, "__builtin_tool_meta__", None)
                 if meta:
+                    # 同时透传 ``params_model``（Pydantic 校验用）
+                    fn_meta = {
+                        "name": meta["name"],
+                        "description": meta["description"],
+                        "parameters": meta["input_schema"],
+                    }
+                    if meta.get("params_model") is not None:
+                        fn_meta["params_model"] = meta["params_model"]
                     schemas.append({
                         "type": "function",
-                        "function": {
-                            "name": meta["name"],
-                            "description": meta["description"],
-                            "parameters": meta["input_schema"],
-                        },
+                        "function": fn_meta,
                     })
         # 子类覆盖在前；按 name 去重
         seen: set = set()

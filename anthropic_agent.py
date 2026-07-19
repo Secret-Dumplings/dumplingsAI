@@ -25,10 +25,13 @@ import time
 import uuid as _uuid
 from typing import List, Optional
 
-import requests
-
 try:
     from .agent_tool import _builtin_promote_overrides, builtin_tool, tool_registry
+    from .llm_transport import (
+        ChatRequest,
+        HttpxAnthropicTransport,
+        LLMResponse,
+    )
     from .logging_config import logger
 except ImportError:
     raise ImportError("不可单独执行，不可单独 import")
@@ -119,6 +122,8 @@ class AnthropicAgent:
     stream: bool = True
     description: Optional[str] = None
     anthropic_version: str = "2023-06-01"
+    tool_timeout: float = 60.0  # 工具调用单次超时；超时即转后台 future
+    tool_max_workers: int = 8  # 工具执行线程池大小
 
     # ---------------- 类层级钩子：子类覆盖 @builtin_tool 方法时自动复用父类的 meta ----------------
     def __init_subclass__(cls, **kwargs):
@@ -132,6 +137,12 @@ class AnthropicAgent:
         self.stream_run = False
         self.current_task_id = None
         self.tool_call_hooks: list = []
+        # 工具执行线程池：超时即转后台 future，让 LLM 可以不阻塞等
+        from .tool_runner import ToolRunner
+        self._tool_runner = ToolRunner(
+            timeout=self.tool_timeout,
+            max_workers=self.tool_max_workers,
+        )
 
         # 把 uuid -> name 关系登记进 tool_registry，复用 BaseAgent 的 ACL
         agent_name = getattr(self.__class__, "name", None) or getattr(self.__class__, "__name__", None)
@@ -246,20 +257,29 @@ class AnthropicAgent:
     # ---------------- 连通性测试 ----------------
     def _connectivity(self):
         """异步触发一次 ping；不阻塞主流程"""
-        url = self._endpoint()
-        payload = {
-            "model": self.model_name,
-            "max_tokens": 1,
-            "messages": [{"role": "user", "content": "ping"}],
-        }
+        from .errors import APIError
+        from .http_utils import HTTPClient
+
         try:
-            rsp = requests.post(url, headers=self.headers, json=payload, timeout=10)
-            if rsp.status_code == 200:
+            client = HTTPClient()
+            rsp = client.post(
+                self._endpoint(),
+                headers=self.headers,
+                json={
+                    "model": self.model_name,
+                    "max_tokens": 1,
+                    "messages": [{"role": "user", "content": "ping"}],
+                },
+                max_retries=0,
+            )
+            if 200 <= rsp.status_code < 300:
                 logger.info(f"{self.name} Anthropic 连接正常")
             else:
                 logger.error(
                     f"{self.name} Anthropic 连接测试未通过：{rsp.status_code} {rsp.text[:200]}"
                 )
+        except APIError as e:
+            logger.error(f"{self.name} Anthropic 连接测试未通过：{e}")
         except Exception as e:
             logger.error(f"{self.name} Anthropic 连接异常：{e}")
 
@@ -281,7 +301,10 @@ class AnthropicAgent:
     def conversation_with_tool(self, messages=None, tool: bool = False, images=None):
         """
         发起一次对话；遇到 tool_use 时自动执行并继续迭代，
-        直至 end_turn / max_tokens / max_tool_turns。
+        直至 end_turn / max_tokens / 显式 attempt_completion。
+
+        工具调用走 ``ToolRunner``：超过 ``tool_timeout`` 自动转后台 future，
+        允许长线任务不阻塞对话循环（无 ``max_tool_turns`` 熔断）。
 
         Args:
             messages: 字符串、消息 dict、消息 list
@@ -298,39 +321,80 @@ class AnthropicAgent:
         # 2. 准备 tools schema（一次收集，每轮复用）
         tools_schema = self._collect_tools_schema()
 
-        # 3. 多轮 tool_use 循环（自带安全熔断）
-        max_tool_turns = 16
-        for turn in range(max_tool_turns):
-            payload = {
-                "model": self.model_name,
-                "max_tokens": self.max_tokens,
-                "system": self.system_prompt,
-                "messages": work_history,
-                "tools": tools_schema,
-            }
-            if self.stream:
-                payload["stream"] = True
+        # 3. 通过 transport 调 LLM
+        transport = HttpxAnthropicTransport(
+            endpoint=self._endpoint(),
+            api_key=self.api_key,
+            anthropic_version=self.anthropic_version,
+            max_tokens=self.max_tokens,
+        )
+
+        # 4. tool_use 循环（无熔断；只受 attempt_completion / 用户主动结束影响）
+        full_text = ""
+        while True:  # noqa: PLR1700 — 设计上无限循环，靠 LLM 自行 attempt_completion 结束
+            req = ChatRequest(
+                model=self.model_name,
+                system=self.system_prompt,
+                messages=list(work_history),
+                tools=tools_schema,
+                stream=self.stream,
+                max_tokens=self.max_tokens,
+            )
+
+            assistant_blocks: list = []
+            tool_uses: list = []
 
             try:
-                blocks = self._call(payload)
+                if self.stream:
+                    for evt in transport.chat_stream(req):
+                        if evt.type == "text":
+                            assistant_blocks.append({"type": "text", "text": evt.text})
+                            self.out({"message": evt.text})
+                        elif evt.type == "tool_call" and evt.tool_call is not None:
+                            tool_uses.append({
+                                "id": evt.tool_call.id,
+                                "name": evt.tool_call.name,
+                                "input": evt.tool_call.arguments,
+                            })
+                        elif evt.type == "usage" and evt.usage is not None:
+                            logger.debug(
+                                f"{self.name} usage: in={evt.usage.prompt_tokens} out={evt.usage.completion_tokens}"
+                            )
+                else:
+                    llm_rsp: LLMResponse = transport.chat(req)
+                    for tc in llm_rsp.tool_calls:
+                        tool_uses.append({
+                            "id": tc.id,
+                            "name": tc.name,
+                            "input": tc.arguments,
+                        })
+                    if llm_rsp.text:
+                        full_text += llm_rsp.text
+                        self.out({"message": llm_rsp.text})
+                    if llm_rsp.usage is not None:
+                        logger.debug(
+                            f"{self.name} usage: in={llm_rsp.usage.prompt_tokens} out={llm_rsp.usage.completion_tokens}"
+                        )
             except Exception as e:
                 logger.error(f"{self.name} Anthropic 调用失败：{e}")
                 raise
 
-            work_history.append({"role": "assistant", "content": blocks})
-            tool_uses = _extract_tool_uses(blocks)
+            # 若流式模式且没有显式 text 块，也存一个 text 块占位
+            if self.stream and not any(b.get("type") == "text" for b in assistant_blocks) and full_text:
+                assistant_blocks.append({"type": "text", "text": full_text})
+
+            work_history.append({"role": "assistant", "content": assistant_blocks})
             if not tool_uses:
-                # 没有 tool_use -> 自然结束
                 break
 
-            # 4. 顺序执行每一个 tool_use
-            tool_results = []
+            # 5. 顺序执行每一个 tool_use（走 ToolRunner，支持超时转后台）
+            tool_results: list = []
             for tu in tool_uses:
                 self.current_task_id = self._generate_task_id()
                 self._execute_hooks("before", tu["name"], tu["input"])
                 self.out({"tool_name": tu["name"], "tool_parameter": tu["input"]})
                 try:
-                    result = self._dispatch_tool(tu["name"], tu["input"])
+                    result, async_id = self._dispatch_tool(tu["name"], tu["input"])
                 except Exception as e:
                     result = f"工具执行失败：{e}"
                     self._execute_hooks("error", tu["name"], tu["input"], result)
@@ -338,21 +402,127 @@ class AnthropicAgent:
                     self._execute_hooks("after", tu["name"], tu["input"], result)
                     self.out({"tool_result": result, "tool_name": tu["name"]})
 
+                # 超时 → 转后台
+                if async_id is not None:
+                    result = (
+                        f"[tool {tu['name']} still running in background as task_id={async_id}; "
+                        f"check via self._tool_runner.get_status('{async_id}') "
+                        f"or wait via self._tool_runner.wait('{async_id}')]"
+                    )
+
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": tu["id"],
                     "content": result if isinstance(result, str) else json.dumps(result, ensure_ascii=False),
                 })
 
-            # 5. 把所有 tool_result 装回 user 消息
+            # 6. 把所有 tool_result 装回 user 消息
             work_history.append({"role": "user", "content": tool_results})
-        else:
-            logger.warning(
-                f"{self.name} Anthropic 工具调用超过 {max_tool_turns} 轮，主动中止"
-            )
 
         # 返回最后一轮 assistant 的纯文本
-        return _extract_text(work_history[-1].get("content", [])) if work_history else ""
+        last = work_history[-1].get("content", []) if work_history else []
+        return "".join(b.get("text", "") for b in last if b.get("type") == "text")
+
+    async def aconversation_with_tool(self, messages=None, tool: bool = False, images=None):
+        """
+        异步版 conversation_with_tool（基于 transport.achat_stream）。
+
+        用法::
+
+            import asyncio
+            result = asyncio.run(agent.aconversation_with_tool("hi"))
+
+        注意：tool_runner 仍是 ThreadPoolExecutor（同步执行工具），但
+        LLM 调用走 async，事件循环不被阻塞。
+        """
+        work_history = self.history
+
+        if not tool and messages is not None:
+            user_msg = self._build_user_message(messages, images)
+            work_history.append(user_msg)
+
+        tools_schema = self._collect_tools_schema()
+        transport = HttpxAnthropicTransport(
+            endpoint=self._endpoint(),
+            api_key=self.api_key,
+            anthropic_version=self.anthropic_version,
+            max_tokens=self.max_tokens,
+        )
+
+        full_text = ""
+        while True:
+            req = ChatRequest(
+                model=self.model_name,
+                system=self.system_prompt,
+                messages=list(work_history),
+                tools=tools_schema,
+                stream=self.stream,
+                max_tokens=self.max_tokens,
+            )
+
+            assistant_blocks: list = []
+            tool_uses: list = []
+
+            try:
+                if self.stream:
+                    async for evt in transport.achat_stream(req):
+                        if evt.type == "text":
+                            assistant_blocks.append({"type": "text", "text": evt.text})
+                            self.out({"message": evt.text})
+                        elif evt.type == "tool_call" and evt.tool_call is not None:
+                            tool_uses.append({
+                                "id": evt.tool_call.id,
+                                "name": evt.tool_call.name,
+                                "input": evt.tool_call.arguments,
+                            })
+                else:
+                    llm_rsp: LLMResponse = await transport.achat(req)
+                    for tc in llm_rsp.tool_calls:
+                        tool_uses.append({
+                            "id": tc.id,
+                            "name": tc.name,
+                            "input": tc.arguments,
+                        })
+                    if llm_rsp.text:
+                        full_text += llm_rsp.text
+                        self.out({"message": llm_rsp.text})
+            except Exception as e:
+                logger.error(f"{self.name} Anthropic 异步调用失败：{e}")
+                raise
+
+            work_history.append({"role": "assistant", "content": assistant_blocks})
+            if not tool_uses:
+                break
+
+            tool_results: list = []
+            for tu in tool_uses:
+                self.current_task_id = self._generate_task_id()
+                self._execute_hooks("before", tu["name"], tu["input"])
+                self.out({"tool_name": tu["name"], "tool_parameter": tu["input"]})
+                try:
+                    result, async_id = self._dispatch_tool(tu["name"], tu["input"])
+                except Exception as e:
+                    result = f"tools execution failed: {e}"
+                    self._execute_hooks("error", tu["name"], tu["input"], result)
+                else:
+                    self._execute_hooks("after", tu["name"], tu["input"], result)
+                    self.out({"tool_result": result, "tool_name": tu["name"]})
+
+                if async_id is not None:
+                    result = (
+                        f"[tool {tu['name']} still running in background as task_id={async_id}]"
+                    )
+
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tu["id"],
+                    "content": result if isinstance(result, str) else json.dumps(result, ensure_ascii=False),
+                })
+
+            work_history.append({"role": "user", "content": tool_results})
+
+        last = work_history[-1].get("content", []) if work_history else []
+        return "".join(b.get("text", "") for b in last if b.get("type") == "text")
 
     def _build_user_message(self, messages, images) -> dict:
         """把用户输入规范成 Anthropic user message"""
@@ -410,115 +580,16 @@ class AnthropicAgent:
 
         return schemas
 
-    # ---------------- API 调用层 ----------------
-    def _call(self, payload: dict) -> List[dict]:
-        url = self._endpoint()
-        if self.stream:
-            return self._call_stream(url, payload)
-        return self._call_blocking(url, payload)
-
-    def _call_blocking(self, url: str, payload: dict) -> List[dict]:
-        body = {k: v for k, v in payload.items() if k != "stream"}
-        rsp = requests.post(url, headers=self.headers, json=body, timeout=60)
-        rsp.encoding = "utf-8"
-        if rsp.status_code != 200:
-            logger.error(f"Anthropic {rsp.status_code}：{rsp.text[:500]}")
-            raise RuntimeError(f"Anthropic error {rsp.status_code}: {rsp.text[:200]}")
-        data = rsp.json()
-        blocks = data.get("content", []) or []
-        text = _extract_text(blocks)
-        if text:
-            self.out({"message": text})
-        stop_reason = data.get("stop_reason")
-        usage = data.get("usage")
-        logger.debug(
-            f"{self.name} Anthropic blocks={len(blocks)} stop_reason={stop_reason} "
-            f"usage={usage}"
+    # ---------------- API 调用层（已迁移到 LLM Transport）----------------
+    # 旧 _call / _call_blocking / _call_stream 在 v0.2 里被 HttpxAnthropicTransport 取代。
+    # 新代码请用：
+    #     from dumplingsAI.llm_transport import HttpxAnthropicTransport
+    #     transport = HttpxAnthropicTransport(...)
+    #     rsp = transport.chat(req)  # 或 transport.chat_stream(req)
+    def _call(self, payload):  # pragma: no cover - 已废弃
+        raise NotImplementedError(
+            "AnthropicAgent._call 已废弃；请通过 HttpxAnthropicTransport 调 LLM。"
         )
-        return blocks
-
-    def _call_stream(self, url: str, payload: dict) -> List[dict]:
-        """
-        流式调用，组装 content blocks。
-
-        Anthropic 事件序列：
-            message_start
-            content_block_start (index, content_block: {type, id, name, text?})
-            content_block_delta (index, delta: {type: text_delta|input_json_delta, text|partial_json})
-            content_block_stop  (index)
-            message_delta       (delta: {stop_reason})
-            message_stop
-        """
-        rsp = requests.post(
-            url,
-            headers={**self.headers, "Accept": "text/event-stream"},
-            json=payload,
-            stream=True,
-            timeout=120,
-        )
-        rsp.encoding = "utf-8"
-        if rsp.status_code != 200:
-            logger.error(f"Anthropic {rsp.status_code}：{rsp.text[:500]}")
-            raise RuntimeError(f"Anthropic error {rsp.status_code}: {rsp.text[:200]}")
-
-        blocks: List[dict] = []
-        current: Optional[dict] = None
-        json_buf = ""
-        event_type = None
-
-        for raw in rsp.iter_lines(decode_unicode=True):
-            logger.trace(raw)
-            if raw is None:
-                continue
-            if raw.startswith("event: "):
-                event_type = raw[7:].strip()
-                continue
-            if not raw.startswith("data: "):
-                continue
-            try:
-                evt = json.loads(raw[6:])
-            except json.JSONDecodeError:
-                continue
-
-            etype = evt.get("type") or event_type
-            if etype == "content_block_start":
-                cb = evt.get("content_block") or {}
-                current = {
-                    "type": cb.get("type", "text"),
-                    "text": cb.get("text", "") or "",
-                    "id": cb.get("id"),
-                    "name": cb.get("name"),
-                    "input": {},
-                }
-                json_buf = ""
-            elif etype == "content_block_delta":
-                if current is None:
-                    continue
-                delta = evt.get("delta") or {}
-                if delta.get("type") == "text_delta":
-                    chunk = delta.get("text", "")
-                    current["text"] = current.get("text", "") + chunk
-                    self.out({"message": chunk})
-                elif delta.get("type") == "input_json_delta":
-                    json_buf += delta.get("partial_json", "")
-            elif etype == "content_block_stop":
-                if current is not None:
-                    if current.get("type") == "tool_use":
-                        try:
-                            current["input"] = json.loads(json_buf) if json_buf else {}
-                        except json.JSONDecodeError:
-                            logger.warning("tool_use JSON 解析失败，保留原始片段")
-                            current["input"] = {"_raw": json_buf}
-                    blocks.append(current)
-                current = None
-                json_buf = ""
-            elif etype == "message_stop":
-                break
-            elif etype == "message_delta":
-                # 这里只会带 stop_reason / usage_delta 等元信息，跳过
-                continue
-
-        return blocks
 
     # ---------------- 工具分发 ----------------
     def _dispatch_tool(self, name: str, arguments: dict):
@@ -526,26 +597,48 @@ class AnthropicAgent:
         工具调用优先级：
             1) Agent 自身被 ``@builtin_tool`` 装饰的同名方法
             2) ``tool_registry`` 中已注册的工具
+
+        实际执行走 ``self._tool_runner``（``ThreadPoolExecutor``）：
+        - ``tool_timeout`` 秒内完成 → 直接返回 (result, None)
+        - 超时 → 后台 future 继续跑，返回 (None, task_id)
+        - LLM 拿到 task_id 描述，可继续做别的
+
+        入参先经 Pydantic 校验（如果 @builtin_tool 提供了 params_model）。
         """
-        # 1) 内置工具：找 instance 上被装饰过的同名方法
+        # Pydantic 校验
+        from .agent_tool import _validate_tool_args_for
+        arguments = _validate_tool_args_for(self, name, arguments)
+
+        # 1) 内置工具
         builtin_names = {s["function"]["name"] for s in tool_registry.collect_builtin_tools(self)}
         if name in builtin_names:
             method = getattr(self, name, None)
             if callable(method):
-                try:
-                    return method(**arguments) if arguments else method()
-                except TypeError:
-                    return method()
+                if arguments:
+                    result, async_id = self._tool_runner.submit(
+                        method, tool_name=name, timeout=self.tool_timeout, **arguments,
+                    )
+                else:
+                    result, async_id = self._tool_runner.submit(
+                        method, tool_name=name, timeout=self.tool_timeout,
+                    )
+                return result, async_id
         # 2) tool_registry
         if tool_registry.check_permission(self.uuid, name):
             tool_info = tool_registry.get_tool_info(name)
             if tool_info:
                 func = tool_info["function"]
                 try:
-                    return func(**arguments)
+                    result, async_id = self._tool_runner.submit(
+                        func, tool_name=name, timeout=self.tool_timeout, **arguments,
+                    )
                 except TypeError:
-                    return func(xml=str(arguments))
-        return f"找不到工具：{name}"
+                    # 兼容 XML 风格工具：传 xml=str(arguments)
+                    result, async_id = self._tool_runner.submit(
+                        func, tool_name=name, timeout=self.tool_timeout, xml=str(arguments),
+                    )
+                return result, async_id
+        return (f"找不到工具：{name}", None)
 
     # ---------------- 内置工具（@builtin_tool 装饰器自动从签名推导 schema）----------------
 

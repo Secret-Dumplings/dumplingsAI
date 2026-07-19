@@ -7,11 +7,15 @@ import time
 import uuid
 from typing import Any
 
-import requests
 from bs4 import BeautifulSoup
 
 try:
     from .agent_tool import _builtin_promote_overrides, builtin_tool, tool_registry
+    from .llm_transport import (
+        ChatRequest,
+        HttpxOpenAITransport,
+        LLMResponse,
+    )
     from .logging_config import logger  # 配置日志
 except Exception:
     raise ImportError("不可单独执行")
@@ -32,6 +36,8 @@ class Agent():
     fc_model = True # 现在xml工具调用改为下位支持，如有bug修复优先级降低
     stream = True
     description = None
+    tool_timeout: float = 60.0  # 工具调用单次超时；超时后转入后台 future
+    tool_max_workers: int = 8  # 工具执行线程池大小
 
     # ---------------- 类层级钩子：子类覆盖 @builtin_tool 方法时自动复用父类的 meta ----------------
     def __init_subclass__(cls, **kwargs):
@@ -44,6 +50,12 @@ class Agent():
         self.stream_run=False
         self.current_task_id = None  # 当前任务 ID
         self.tool_call_hooks = []     # 工具调用钩子列表
+        # 工具执行线程池：超时即转后台 future，允许长线任务不阻塞对话循环
+        from .tool_runner import ToolRunner
+        self._tool_runner = ToolRunner(
+            timeout=self.tool_timeout,
+            max_workers=self.tool_max_workers,
+        )
         agent_name = getattr(self.__class__, 'name', None) or getattr(self.__class__, '__name__', None)
         if agent_name and self.uuid:
             tool_registry.register_agent_uuid(self.uuid, agent_name)
@@ -137,21 +149,38 @@ class Agent():
 
     # ---------------- 连通性测试 ----------------
     def Connectivity(self):
-        payload = {
-            "model": self.model_name,
-            "messages": [{"role": "user", "content": "你好"}],
-            "stream": self.stream,
-            "stream_options": {"include_usage": True},
-            "max_tokens": 1
-        }
-        rsp = requests.post(self.api_provider,
-                            headers=self.headers,
-                            json=payload)
-        if rsp.status_code == 200:
+        """异步 ping：走 HTTPClient，不重试（max_retries=0）。"""
+        from .errors import APIError
+        from .http_utils import HTTPClient
+
+        try:
+            client = HTTPClient()
+            payload = {
+                "model": self.model_name,
+                "messages": [{"role": "user", "content": "你好"}],
+                "stream": self.stream,
+                "stream_options": {"include_usage": True},
+                "max_tokens": 1,
+            }
+            rsp = client.post(
+                self.api_provider,
+                headers=self.headers,
+                json=payload,
+                max_retries=0,
+            )
+            ok = 200 <= rsp.status_code < 300
+        except APIError as e:
+            logger.error(f"{self.name} 连接测试未通过：{e}")
+            return False
+        except Exception as e:
+            logger.error(f"{self.name} 连接异常：{e}")
+            return False
+
+        if ok:
             logger.info(f"{self.name} 连接正常")
         else:
-            logger.error(f"{self.name} 连接测试未通过，可能存在配置错误")
-        return rsp.status_code == 200
+            logger.error(f"{self.name} 连接测试未通过：status={rsp.status_code}")
+        return ok
 
     # ---------------- 主对话函数 ----------------
     def conversation_with_tool(self, messages=None, tool=False, images=None):
@@ -187,127 +216,95 @@ class Agent():
 
         if self.fc_model:
             # Function Calling 模式
-            tools_schema = tool_registry.get_all_tools_schema(self.uuid)
-
-            # 通过自动收集器添加内置工具（@builtin_tool 装饰）到 schema
+            tools_schema = list(tool_registry.get_all_tools_schema(self.uuid))
             for s in tool_registry.collect_builtin_tools(self):
                 tools_schema.append(s)
-
-            # 添加 Skills 到 Function Calling schema
             try:
                 from .skill import skill_registry
                 tools_schema.extend(skill_registry.get_all_tool_schemas())
             except ImportError:
                 pass
-
-            payload = {
-                "model": self.model_name,
-                "messages": work_history,
-                "stream": self.stream,
-                "tools": tools_schema,
-                "tool_choice": "auto"
-            }
-            if self.stream:
-                payload["stream_options"] = {"include_usage": True},
         else:
-            # XML 模式（原有逻辑）
-            payload = {
-                "model": self.model_name,
-                "messages": work_history,
-                "stream": self.stream,
-                "stream_options": {"include_usage": True}
-            }
-            if self.stream:
-                payload["stream_options"] = {"include_usage": True},
+            tools_schema = []
 
-        rsp = requests.post(
-            self.api_provider,
-            headers={**self.headers,
-                     "Accept-Charset": "utf-8",
-                     "Accept": "text/event-stream"},
-            json=payload,
-            stream=self.stream
+        # 抽出 system（history[0]）→ ChatRequest.system
+        if work_history and isinstance(work_history[0], dict) and work_history[0].get("role") == "system":
+            system_str = work_history[0].get("content") or ""
+            rest_messages = list(work_history[1:])
+        else:
+            system_str = ""
+            rest_messages = list(work_history)
+
+        req = ChatRequest(
+            model=self.model_name,
+            system=system_str,
+            messages=rest_messages,
+            tools=tools_schema,
+            stream=self.stream,
         )
-        rsp.encoding = 'utf-8'
+
+        # ---- 通过 transport 调 LLM ----
+        transport = HttpxOpenAITransport(
+            endpoint=self.api_provider,
+            api_key=self.api_key,
+        )
 
         full_content = ""
+        tool_calls_list: list = []
         self.stream_run = True
-        tool_calls_list = []  # 存储所有 tool_calls
 
         if self.stream:
-            # 流式响应处理
-            for line in rsp.iter_lines(decode_unicode=True):
-                logger.trace(line)
-                if not line or not line.startswith('data: '):
-                    continue
-                data = line[6:]
-                if data == '[DONE]':
-                    break
-                try:
-                    chunk = json.loads(data)
-                except json.JSONDecodeError:
-                    continue
-
-                delta = (chunk.get('choices') or [{}])[0].get('delta') or {}
-
-                # Function Calling: 处理 tool_calls
-                if self.fc_model:
-                    tool_calls = delta.get('tool_calls')
-                    if tool_calls:
-                        for call in tool_calls:
-                            # 初始化或更新 tool_calls_list
-                            if call.get('index') is not None:
-                                idx = call['index']
-                                if idx >= len(tool_calls_list):
-                                    tool_calls_list.append({
-                                        'id': call.get('id'),
-                                        'function': {
-                                            'name': call['function']['name'],
-                                            'arguments': call['function'].get('arguments') or ''
-                                        }
-                                    })
-                                else:
-                                    if 'arguments' in call['function'] and call['function']['arguments'] is not None:
-                                        tool_calls_list[idx]['function']['arguments'] += call['function']['arguments']
-                            continue
-
-                # 普通 content
-                content = delta.get('content', '')
-                if content:
-                    full_content += content
-                    self.pack(content, finish_task=False)
-
-                usage = chunk.get('usage')
-                if usage:
+            for evt in transport.chat_stream(req):
+                if evt.type == "text":
+                    full_content += evt.text
+                    self.pack(evt.text, finish_task=False)
+                elif evt.type == "tool_call" and evt.tool_call is not None:
+                    tc = evt.tool_call
+                    tool_calls_list.append({
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.name,
+                            "arguments": json.dumps(tc.arguments, ensure_ascii=False),
+                        },
+                    })
+                elif evt.type == "usage" and evt.usage is not None:
                     self.stream_run = False
                     self.pack(finish_task=True)
-                    self.pack(f"\n本次请求用量：提示 {usage['prompt_tokens']} tokens，"
-                          f"生成 {usage['completion_tokens']} tokens，"
-                          f"总计 {usage['total_tokens']} tokens。", other=True)
+                    self.pack(
+                        f"\n本次请求用量：提示 {evt.usage.prompt_tokens} tokens，"
+                        f"生成 {evt.usage.completion_tokens} tokens，"
+                        f"总计 {evt.usage.total_tokens} tokens。",
+                        other=True,
+                    )
+                # evt.type == "done" 不需要额外处理
         else:
-            # 非流式响应处理
             self.stream_run = False
             try:
-                response_json = rsp.json()
-                logger.trace(response_json)
-                message = response_json['choices'][0]['message']
-                full_content = message.get('content', '')
-
-                # Function Calling: 处理 tool_calls
-                if self.fc_model:
-                    tool_calls_list = message.get('tool_calls', [])
-
+                llm_rsp: LLMResponse = transport.chat(req)
+                full_content = llm_rsp.text
                 if full_content:
                     self.pack(full_content, finish_task=False)
-                usage = response_json.get('usage', {})
-                if usage:
+                for tc in llm_rsp.tool_calls:
+                    tool_calls_list.append({
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.name,
+                            "arguments": json.dumps(tc.arguments, ensure_ascii=False),
+                        },
+                    })
+                if llm_rsp.usage is not None:
                     self.pack(finish_task=True)
-                    self.pack(f"\n本次请求用量：提示 {usage['prompt_tokens']} tokens，"
-                          f"生成 {usage['completion_tokens']} tokens，"
-                          f"总计 {usage['total_tokens']} tokens。", other=True)
+                    self.pack(
+                        f"\n本次请求用量：提示 {llm_rsp.usage.prompt_tokens} tokens，"
+                        f"生成 {llm_rsp.usage.completion_tokens} tokens，"
+                        f"总计 {llm_rsp.usage.total_tokens} tokens。",
+                        other=True,
+                    )
             except Exception as e:
                 logger.error(f"非流式响应处理错误: {e}")
-                full_content = rsp.text
+                full_content = ""
 
         logger.trace(f"AI 回复内容长度：{len(full_content)}")
 
@@ -358,7 +355,21 @@ class Agent():
                     self._execute_hooks('before', tool_name, args)
                     logger.debug(f"调用工具 {tool_name}，参数: {args}")
                     self.pack(tool_name=tool_name, tool_parameter=args)
-                    result = tool_func(**args)
+
+                    # Pydantic 校验（如果 @builtin_tool 提供了 params_model）
+                    from .agent_tool import _validate_tool_args_for
+                    args = _validate_tool_args_for(self, tool_name, args)
+
+                    result, async_id = self._tool_runner.submit(
+                        tool_func, tool_name=tool_name, timeout=self.tool_timeout, **args
+                    )
+                    if async_id is not None:
+                        # 超时转后台：让 LLM 拿到 task_id 继续做别的
+                        result = (
+                            f"[tool {tool_name} still running in background as task_id={async_id}; "
+                            f"check via self._tool_runner.get_status('{async_id}') "
+                            f"or wait via self._tool_runner.wait('{async_id}')]"
+                        )
 
                     # 执行 after 钩子
                     self._execute_hooks('after', tool_name, args, result)
@@ -391,7 +402,7 @@ class Agent():
                     "content": result['content']
                 })
 
-            # 继续对话
+            # 继续对话（无熔断；只受 attempt_completion / 用户主动结束影响）
             logger.debug("工具执行完成，继续对话")
             return self.conversation_with_tool(tool=True)
 
@@ -513,6 +524,189 @@ class Agent():
             logger.debug(f"返回对话历史最后一条，长度：{len(work_history[-1].get('content')) if work_history[-1].get('content') else 0}")
             return work_history[-1].get("content")
         return full_content
+
+    async def aconversation_with_tool(self, messages=None, tool=False, images=None):
+        """
+        异步版 conversation_with_tool（基于 transport.achat_stream）。
+
+        用法::
+
+            import asyncio
+            result = asyncio.run(agent.aconversation_with_tool("hi"))
+
+        注意：tool_runner 仍是 ThreadPoolExecutor（同步执行工具），但
+        LLM 调用走 async，事件循环不被阻塞。
+        """
+        from .llm_transport import ChatRequest, HttpxOpenAITransport
+
+        work_history = self.history
+
+        if not tool and messages is not None:
+            if images:
+                content_list = [{"type": "text", "text": messages}]
+                for img in images:
+                    if img.startswith("http"):
+                        content_list.append({
+                            "type": "image_url",
+                            "image_url": {"url": img},
+                        })
+                    else:
+                        content_list.append({
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{img}"},
+                        })
+                work_history.append({"role": "user", "content": content_list})
+            else:
+                work_history.append({"role": "user", "content": messages})
+
+        if self.fc_model:
+            tools_schema = list(tool_registry.get_all_tools_schema(self.uuid))
+            for s in tool_registry.collect_builtin_tools(self):
+                tools_schema.append(s)
+            try:
+                from .skill import skill_registry
+                tools_schema.extend(skill_registry.get_all_tool_schemas())
+            except ImportError:
+                pass
+        else:
+            tools_schema = []
+
+        if work_history and isinstance(work_history[0], dict) and work_history[0].get("role") == "system":
+            system_str = work_history[0].get("content") or ""
+            rest_messages = list(work_history[1:])
+        else:
+            system_str = ""
+            rest_messages = list(work_history)
+
+        req = ChatRequest(
+            model=self.model_name,
+            system=system_str,
+            messages=rest_messages,
+            tools=tools_schema,
+            stream=self.stream,
+        )
+
+        transport = HttpxOpenAITransport(endpoint=self.api_provider, api_key=self.api_key)
+        full_content = ""
+        tool_calls_list: list = []
+
+        if self.stream:
+            async for evt in transport.achat_stream(req):
+                if evt.type == "text":
+                    full_content += evt.text
+                    self.pack(evt.text, finish_task=False)
+                elif evt.type == "tool_call" and evt.tool_call is not None:
+                    tc = evt.tool_call
+                    tool_calls_list.append({
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.name,
+                            "arguments": json.dumps(tc.arguments, ensure_ascii=False),
+                        },
+                    })
+                elif evt.type == "usage" and evt.usage is not None:
+                    self.stream_run = False
+                    self.pack(finish_task=True)
+                    self.pack(
+                        f"\nusage: prompt={evt.usage.prompt_tokens} "
+                        f"completion={evt.usage.completion_tokens} "
+                        f"total={evt.usage.total_tokens}",
+                        other=True,
+                    )
+        else:
+            self.stream_run = False
+            llm_rsp = await transport.achat(req)
+            full_content = llm_rsp.text
+            if full_content:
+                self.pack(full_content, finish_task=False)
+            for tc in llm_rsp.tool_calls:
+                tool_calls_list.append({
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.name,
+                        "arguments": json.dumps(tc.arguments, ensure_ascii=False),
+                    },
+                })
+            if llm_rsp.usage is not None:
+                self.pack(finish_task=True)
+                self.pack(
+                    f"\nusage: prompt={llm_rsp.usage.prompt_tokens} "
+                    f"completion={llm_rsp.usage.completion_tokens} "
+                    f"total={llm_rsp.usage.total_tokens}",
+                    other=True,
+                )
+
+        # FC 模式：执行 tool calls
+        if self.fc_model and tool_calls_list:
+            work_history.append({
+                "role": "assistant",
+                "content": None,
+                "tool_calls": tool_calls_list,
+            })
+            tool_results: list = []
+            for tool_call in tool_calls_list:
+                tool_name = tool_call["function"]["name"]
+                tool_id = tool_call["id"]
+                try:
+                    args = json.loads(tool_call["function"]["arguments"])
+                    from .agent_tool import _validate_tool_args_for
+                    args = _validate_tool_args_for(self, tool_name, args)
+                    self.current_task_id = self._generate_task_id()
+                    self._execute_hooks("before", tool_name, args)
+                    self.pack(tool_name=tool_name, tool_parameter=args)
+                    result, async_id = self._tool_runner.submit(
+                        tool_func=self._resolve_tool(tool_name),
+                        tool_name=tool_name,
+                        timeout=self.tool_timeout,
+                        **args,
+                    )
+                    if async_id is not None:
+                        result = (
+                            f"[tool {tool_name} still running in background as task_id={async_id}]"
+                        )
+                    self._execute_hooks("after", tool_name, args, result)
+                    self.pack(tool_result=result, tool_name=tool_name)
+                    tool_results.append({
+                        "tool_call_id": tool_id,
+                        "name": tool_name,
+                        "content": result,
+                    })
+                except Exception as e:
+                    error_msg = f"tools execution failed: {e}"
+                    logger.error(error_msg)
+                    self._execute_hooks("error", tool_name, args, error_msg)
+                    tool_results.append({
+                        "tool_call_id": tool_id,
+                        "name": tool_name,
+                        "content": error_msg,
+                    })
+            for result in tool_results:
+                work_history.append({
+                    "role": "tool",
+                    "tool_call_id": result["tool_call_id"],
+                    "name": result["name"],
+                    "content": result["content"],
+                })
+            return await self.aconversation_with_tool(tool=True)
+
+        return full_content
+
+    def _resolve_tool(self, name: str):
+        """解析 tool 名字到实际 callable"""
+        tool_func = None
+        if tool_registry.check_permission(self.uuid, name):
+            info = tool_registry.get_tool_info(name)
+            if info is not None:
+                tool_func = info["function"]
+        if tool_func is None and hasattr(self, name):
+            method = getattr(self, name)
+            if callable(method):
+                tool_func = method
+        if tool_func is None:
+            raise ValueError(f"tool not found: {name}")
+        return tool_func
 
     def pack(self, message=None, tool_model=False, tool_name=None, tool_parameter=None,
              finish_task=False, other=False, tool_result=None):
