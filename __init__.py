@@ -1,43 +1,57 @@
 # -*- coding: utf-8 -*-
 """
 dumplingsAI - 多智能体协作框架
-============================
+==============================
 
-基于 LLM 的轻量级多智能体协作系统框架。
+基于 LLM 的轻量级多智能体协作系统框架，支持 OpenAI 兼容协议与 Anthropic 协议。
 
 快速开始
 --------
->>> import dumplingsAI
->>> @dumplingsAI.register_agent("uuid", "name")
-... class MyAgent(dumplingsAI.BaseAgent):
-...     prompt = "你是一个助手"
-...     api_provider = "https://api.example.com/v1/chat/completions"
-...     model_name = "qwen3.5-plus"
-...     api_key = "your-api-key"
->>> agent = dumplingsAI.agent_list["name"]
->>> agent.conversation_with_tool("你好")
 
-核心组件
+    import dumplingsAI
+    from dotenv import load_dotenv
+    load_dotenv()  # API_KEY 放在 .env
+
+    @dumplingsAI.register_agent("uuid-1", "my_agent")
+    class MyAgent(dumplingsAI.BaseAgent):
+        prompt = "你是一个助手"
+        api_provider = "https://api.example.com/v1/chat/completions"
+        model_name = "qwen3.5-plus"
+        api_key = "your-api-key"
+
+    agent = dumplingsAI.agent_list["my_agent"]
+    agent.conversation_with_tool("你好")
+
+Anthropic 协议用法::
+
+    from dumplingsAI.anthropic_agent import AnthropicAgent
+
+    @dumplingsAI.register_agent("uuid-2", "claude_agent")
+    class ClaudeAgent(AnthropicAgent):
+        prompt = "你是一个助手"
+        model_name = "claude-3-5-sonnet-latest"
+        api_key = "sk-ant-..."   # 也可指向任意兼容端点（详见 AnthropicAgent docstring）
+
+    dumplingsAI.agent_list["claude_agent"].conversation_with_tool("你好")
+
+核心导出
 --------
-- register_agent : Agent 注册装饰器
-- tool_registry : 工具注册器实例
-- BaseAgent : Agent 基类
-- agent_list : 已注册 Agent 字典
-- mcp_bridge : MCP 服务器集成模块
-- skill : Agent Skills 开放标准集成
 
-示例代码
+- ``register_agent`` : Agent 注册装饰器（双键：UUID + 名称）
+- ``tool_registry``  : 工具注册器实例（@tool_registry.register_tool）
+- ``BaseAgent``      : Agent 基类（OpenAI 协议）
+- ``agent_list``     : 已注册 Agent 字典（按 UUID / 名称索引）
+- ``anthropic_agent.AnthropicAgent`` : Anthropic 协议 Agent 基类
+- ``mcp_bridge``     : MCP 服务器集成（register_mcp_tools 等）
+- ``skill``          : Agent Skills 开放标准集成
+
+更多资源
 --------
-更多示例请查看 examples 文件夹：
-- example1_basic.py : 单 Agent 基础用法
-- example2_custom_tools.py : 注册自定义工具
-- example3_multi_agent.py : 多 Agent 协作
-- example4_mcp.py : MCP 服务器集成
-- example5_custom_output.py : 自定义输出处理
 
-许可证
--------
-Apache License 2.0
+- 完整文档：https://github.com/Secret-Dumplings/dumplingsAI
+- 示例代码：examples/ 目录
+- 发布流程：仓库根目录 RELEASING.md
+- 许可证：Apache License 2.0
 """
 
 from .Agent_Base_ import Agent as BaseAgent
@@ -110,15 +124,18 @@ __all__ = [
 
 
 def help():
-    """
-    打印 dumplingsAI 框架的帮助信息和使用示例。
+    """在终端打印帮助信息。
 
-    示例:
-        >>> import dumplingsAI
-        >>> dumplingsAI.help()
+    内容由两部分拼装，**全部自动生成，无硬编码字符串**：
+
+    1. **静态文档**：直接 ``print(__doc__)``（即模块顶部 docstring）。
+       改 docstring 一次，``help()`` 输出自动跟着改。
+    2. **运行时状态**：从 ``agent_list`` / ``tool_registry`` 反射当前已注册的对象。
+       不需要手动维护"当前已注册 Agent 列表"之类的字符串。
+
+    Windows 终端自动切换到 UTF-8 编码，避免中文乱码。
     """
     import sys
-    # Windows 终端兼容性：设置 UTF-8 编码
     if sys.platform == 'win32':
         try:
             sys.stdout.reconfigure(encoding='utf-8')
@@ -126,108 +143,39 @@ def help():
             import io
             sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
-    print("""
-+======================================================================+
-|                    dumplingsAI 多智能体协作框架                          |
-|                         快速上手指南                                  |
-+======================================================================+
+    # 1) 静态文档：模块 docstring
+    print(__doc__)
 
-[1. 创建第一个 Agent]
+    # 2) 运行时状态（反射当前已注册的 Agent / 工具）
+    print(f"\n运行时状态（v{__version__}）")
+    print("-" * 60)
+    n_agents = len(agent_list)
+    if n_agents:
+        names = sorted(agent_list.keys())
+        print(f"已注册 Agent: {n_agents} 个 → {', '.join(names)}")
+    else:
+        print("已注册 Agent: 0 个（请用 @dumplingsAI.register_agent 注册）")
 
-    @dumplingsAI.register_agent("unique-uuid", "my_agent")
-    class MyAgent(dumplingsAI.BaseAgent):
-        prompt = "你是一个智能助手"
-        api_provider = "https://api.example.com/v1/chat/completions"
-        model_name = "qwen3.5-plus"
-        api_key = os.getenv("API_KEY")
+    try:
+        tools = list(tool_registry.list_tools() or [])
+    except Exception:  # pragma: no cover
+        tools = []
+    if tools:
+        print(f"已注册工具: {len(tools)} 个 → {', '.join(sorted(tools))}")
+    else:
+        print("已注册工具: 0 个（请用 @tool_registry.register_tool 注册）")
 
-    # 获取并运行
-    agent = dumplingsAI.agent_list["my_agent"]
-    agent.conversation_with_tool("你好")
-
-[2. 注册自定义工具]
-
-    @dumplingsAI.tool_registry.register_tool(
-        allowed_agents=None,  # None 表示所有 Agent 可用
-        name="get_weather",
-        description="查询天气",
-        parameters={
-            "type": "object",
-            "properties": {
-                "city": {"type": "string", "description": "城市名"}
-            },
-            "required": ["city"]
-        }
-    )
-    def get_weather(city: str) -> str:
-        return f"{city}今天晴朗"
-
-[3. 多 Agent 协作]
-
-    # Agent 可以使用内置工具请求其他 Agent 帮助
-    agent.conversation_with_tool(
-        "请请求 time_agent 帮你查看当前时间"
-    )
-
-[4. 查看可用资源]
-
-    # 查看所有注册工具
-    dumplingsAI.tool_registry.list_tools()
-
-    # 查看 Agent 可用工具
-    agent = dumplingsAI.agent_list["my_agent"]
-    agent.get_all_available_tools()
-
-    # 查看所有 Agent
-    list(dumplingsAI.agent_list.keys())
-
-[5. MCP 集成]
-
-    # 注册 MCP 服务器工具
-    dumplingsAI.register_mcp_tools(
-        server_path="path/to/mcp_server.py",
-        allowed_agents=["my_agent"]
-    )
-
-[6. Skills 集成]
-
-    # 扫描并注册 Skills（支持 .claude/skills/ 目录）
-    from pathlib import Path
-    dumplingsAI.skill_registry.scan_and_register([Path(".")])
-
-    # 直接注册单个 Skill 目录
-    dumplingsAI.skill_registry.register_skill(Path(".claude/skills/my-skill"))
-
-    # Agent 自动发现并使用 Skills（通过 tool_registry 桥接）
-    # Skills 会出现在 Agent 的工具列表中，可通过 Function Calling 调用
-
-    # 查询 Skills
-    dumplingsAI.skill_registry.list_skills()
-    dumplingsAI.skill_registry.search_skills("关键词")
-
-[配置说明]
-
-    在项目根目录创建 .env 文件:
-    API_KEY=your_api_key_here
-
-[示例代码]
-
-    查看 examples 文件夹获取更多示例:
-    - examples/example1_basic.py      单 Agent 基础
-    - examples/example2_custom_tools.py 自定义工具
-    - examples/example3_multi_agent.py  多 Agent 协作
-    - examples/example4_mcp.py         MCP 集成
-    - examples/example5_custom_output.py 自定义输出
-
-[文档]
-
-    完整文档请查看 README.md
-
-[许可证]
-
-    Apache License 2.0
-""")
+    # 3) 命令行入口提示（指向真实模块，不写死字符串）
+    try:
+        import dumplingsAI.cli as _cli
+        cli_module = _cli.__name__
+    except Exception:  # pragma: no cover
+        cli_module = "dumplingsAI"
+    print("\n命令行入口：")
+    print(f"  $ python -m {cli_module} --help    # 全部子命令")
+    print(f"  $ python -m {cli_module} --doctor  # 环境自检（Python / API Key / 已注册 Agent）")
+    print(f"  $ python -m {cli_module} --demo    # 离线 demo（不连真实 LLM）")
 
 
-# 方便交互式访问
+# 方便交互式访问：``help(dumplingsAI)`` 会显示模块 docstring
 help.__doc__ = __doc__
