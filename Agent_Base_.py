@@ -43,6 +43,17 @@ class Agent():
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
         _builtin_promote_overrides(cls)
+        # 一次性检测：子类覆写 pack() 但没有覆写 out() 时打 warning。
+        # 在 __init_subclass__ 中做静态检测，确保无论子类 pack 是否调 super() 都能命中。
+        # AnthropicAgent 这种中间层（有自己的 out）不会误报：cls.out != Agent.out 时不警告。
+        if cls.pack is not Agent.pack and cls.out is Agent.out:
+            logger.warning(
+                "[dumplingsAI] 检测到子类 {} 覆写了 pack() 但没有覆写 out()。"
+                "如果你想自定义输出行为（流式 / UI / 自定义 logger 等），"
+                "请覆写 out(content) 而不是 pack() ——"
+                "pack() 只负责把事件打包成 dict 然后调用 self.out(content) 丢出去。",
+                cls.__name__,
+            )
     # ---------------- 通用构造 ----------------
     def __init__(self,new_load=True):
         self.uuid=self.__class__.uuid
@@ -721,6 +732,12 @@ class Agent():
             finish_task: 是否任务完成
             other: 其他标记
             tool_result: 工具执行结果
+
+        注意:
+            ``pack`` 的职责只是把"事件"打包成 dict 然后交给 ``self.out(content)``。
+            如果你的目标是**接管输出行为**（流式 / UI / 自定义 logger / 静默等），
+            请覆写 ``out``，不要覆写 ``pack``。
+            框架在子类覆写 ``pack`` 但未覆写 ``out`` 时会在构造时给出一条 warning。
         """
         content = {}
         task_id = self.current_task_id or self._generate_task_id()
@@ -799,7 +816,7 @@ class Agent():
         from .agent_queue import get_call_chain, get_default_queue
 
         try:
-            from Dumplings import agent_list
+            from dumplingsAI import agent_list
 
             target = agent_list.get(agent_id)
             if target is None:
@@ -827,7 +844,7 @@ class Agent():
     )
     def list_agents(self) -> str:
         """返回当前系统中所有已注册 Agent 的清单，便于发现协作对象。"""
-        from Dumplings import agent_list
+        from dumplingsAI import agent_list
 
         unique_agents: dict = {}
         for _key, inst in agent_list.items():
