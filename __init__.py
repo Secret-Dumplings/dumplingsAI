@@ -66,7 +66,20 @@ except ImportError:
 from .skill import Skill, skill_registry
 from .skill_bridge import register_skill_as_tool, unregister_skill_from_tool
 
-__version__ = "0.1.0"
+# 版本号自动从包元数据读取，与 Dumplings/pyproject.toml 中的 version 字段保持同步。
+# 覆盖方式（仅在打包失败等极端场景下使用）：import dumplingsAI; dumplingsAI.__version__ = "x"
+try:
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import version as _pkg_version
+
+    try:
+        __version__ = _pkg_version("dumplingsAI")
+    except PackageNotFoundError:
+        # 包未安装（极少见，例如源码直接以脚本运行）
+        __version__ = "0.0.0+unknown"
+except Exception:  # pragma: no cover
+    __version__ = "0.0.0+unknown"
+
 __author__ = "secret_dumplings"
 __all__ = [
     # 核心组件

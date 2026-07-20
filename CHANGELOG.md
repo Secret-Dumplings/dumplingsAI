@@ -7,6 +7,36 @@ dumplingsAI 的所有显著变更记录。
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-20
+
+### Fixed
+- `Agent_Base_.py` 内部两处错误的绝对导入 `from Dumplings import agent_list`
+  → 改为 `from dumplingsAI import agent_list`（安装后能正常工作）
+- `__init__.py` 的 `__version__` 不再硬编码，自动从 `pyproject.toml` 的
+  `version` 字段读取（`importlib.metadata`），pyproject 改版本号后无需再
+  手动同步 `__init__.py`
+
+### Changed
+- `pyproject.toml` 的 `license` 字段从已弃用的 `{ text = "..." }` 表单改为
+  SPDX 表达式 `license = "Apache-2.0"`，并移除 deprecated 的
+  `License :: OSI Approved :: Apache Software License` classifier
+- `AnthropicAgent` 的 class docstring 补充"自定义服务商"小节：
+  - 官方 API、第三方代理、完整 URL、OpenAI 兼容网关的 `/anthropic` 子路径、
+    AWS Bedrock 等场景
+  - 自定义 header（Bearer / 租户 ID）的覆盖方式
+  - 完整示例见 `examples/example6_anthropic_custom_provider.py`
+- `BaseAgent.__init_subclass__` 增加覆写提示：子类覆写 `pack()` 但未覆写
+  `out()` 时给出 warning，引导用户改 `out()` 而非 `pack()`
+
+### Added
+- `examples/example6_anthropic_custom_provider.py`：AnthropicAgent 自定义服务商的 4 种用法
+- `RELEASING.md`：发布流程文档（PyPI Trusted Publisher 登记、tag 推送、日常发版、并发保护、FAQ）
+- `.github/workflows/python-publish.yml` 重写为 **tag 触发自动发布**：
+  - `push tags: ['vX.Y.Z', 'vX.Y.ZrcN', 'vX.Y.Z.postN']` 自动 build + publish + 创建 GitHub Release
+  - 保留 `workflow_dispatch`（默认 dry_run 不发 PyPI）用于本地验证打包
+  - `concurrency` 防止同 tag 重复跑
+  - 完整使用 Trusted Publishing（OIDC），无需 API token
+
 ## [0.2.0] - 2026-07-19
 
 ### Added
@@ -79,7 +109,8 @@ dumplingsAI 的所有显著变更记录。
 - `BaseAgent` 抽象基类
 - CLI 入口 `main.py`
 
-[Unreleased]: https://github.com/Secret-Dumplings/dumplingsAI/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Secret-Dumplings/dumplingsAI/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/Secret-Dumplings/dumplingsAI/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Secret-Dumplings/dumplingsAI/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/Secret-Dumplings/dumplingsAI/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Secret-Dumplings/dumplingsAI/releases/tag/v0.1.0

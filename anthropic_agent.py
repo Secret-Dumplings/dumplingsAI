@@ -102,14 +102,48 @@ class AnthropicAgent:
 
     必填类属性:
         prompt        : 系统提示词
-        api_provider  : base URL（默认 https://api.anthropic.com，或已包含 /v1/messages 的完整 URL）
-        model_name    : 模型名，如 claude-3-5-sonnet-latest
-        api_key       : x-api-key
+        api_provider  : base URL（默认 ``https://api.anthropic.com``，可指向任意
+                        兼容 Anthropic Messages API 的服务，详见下文"自定义服务商"）
+        model_name    : 模型名，如 ``claude-3-5-sonnet-latest``
+        api_key       : ``x-api-key`` 头的值
     可选类属性:
         max_tokens        : 单次响应上限（默认 4096）
         stream            : 是否流式（默认 True）
         fc_model          : 兼容位，Anthropic 原生 tool_use，永远为 True
-        anthropic_version : API 版本头（默认 2023-06-01）
+        anthropic_version : API 版本头（默认 ``2023-06-01``）
+
+    自定义服务商
+    ------------
+    ``AnthropicAgent`` 不只面向官方 ``api.anthropic.com``，可指向任意兼容
+    Anthropic Messages API 的服务：
+
+    1. **官方 Anthropic** —— 留空 ``api_provider`` 即可，默认走 ``https://api.anthropic.com``
+    2. **第三方代理 / 加速网关** —— ``api_provider = "https://your-proxy.example.com"``
+    3. **完整 endpoint** —— ``api_provider = "https://your-proxy.example.com/v1/messages"``
+    4. **OpenAI 兼容网关的 anthropic 路径** —— ``api_provider = "https://your-gateway.com/anthropic"``
+    5. **AWS Bedrock** —— ``api_provider = "bedrock-runtime.<region>.amazonaws.com"``
+       （需要额外 header，可在子类 ``__init__`` 里覆盖 ``self.headers``）
+
+    框架的 :py:meth:`_endpoint` 会智能拼接：
+        * 末尾是 ``/v1/messages`` → 原样使用
+        * 末尾是 ``/v1``         → 拼上 ``/messages``
+        * 其他                   → 拼上 ``/v1/messages``
+
+    如果网关要求额外 header（如 ``Authorization: Bearer xxx`` / 租户 ID），在子类
+    ``__init__`` 里覆盖 ``self.headers`` 即可：
+
+        class MyAgent(AnthropicAgent):
+            api_provider = "https://your-gateway.example.com/anthropic"
+            api_key = "internal-tenant-key"
+
+            def __init__(self, new_load=True):
+                super().__init__(new_load=new_load)
+                self.headers["X-Tenant-Id"] = "tenant-001"
+                # 如果网关用 Bearer 而非 x-api-key：
+                # self.headers["Authorization"] = f"Bearer {self.api_key}"
+                # self.headers.pop("x-api-key", None)
+
+    完整示例见 ``examples/example6_anthropic_custom_provider.py``。
     """
 
     # ---- 类属性默认值 ----

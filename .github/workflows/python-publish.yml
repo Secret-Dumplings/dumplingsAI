@@ -1,23 +1,44 @@
-# dumplingsAI 发布到 PyPI
-# 触发条件：① 发布 release；② 手动 workflow_dispatch（用于验证打包本身）
-# 用 Trusted Publishing（pypa/gh-action-pypi-publish），无需 API token。
-
-name: Upload Python Package
+# dumplingsAI 自动发布到 PyPI
+#
+# 触发方式：
+#   ① push 一个形如 v0.2.1 的 tag —— 自动 build + 发到 PyPI + 创建 GitHub Release（**全自动**）
+#   ② 手动 workflow_dispatch —— 仅 build 并上传 artifact，不发布到 PyPI（用于本地验证打包本身）
+#
+# PyPI 凭证：使用 Trusted Publishing（OIDC），无需 API token。
+#   首次需要在 https://pypi.org/manage/account/publishing/ 把这个仓库登记为 Trusted Publisher，
+#   Project name = dumplingsAI，Workflow filename = python-publish.yml。
+name: Publish Python Package
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+.post*'
+      - 'v[0-9]+.[0-9]+.[0-9]+.rc*'
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: '只 build + 上传 artifact，不发到 PyPI（默认勾上）'
+        required: false
+        default: 'true'
+        type: boolean
 
 permissions:
-  contents: read
+  contents: write  # 创建 GitHub Release 需要
+
+concurrency:
+  # 同时只能跑一个发布流程；新 tag 自动取消上一次
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  release-build:
+  build:
+    name: Build sdist + wheel
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 需要完整历史给 changelog/release-notes 用
 
       - uses: astral-sh/setup-uv@v6
         with:
@@ -27,10 +48,8 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
 
-      - name: Sync deps (含 build)
-        run: |
-          uv sync --group dev
-          uv pip install build twine
+      - name: Sync dev deps
+        run: uv sync --group dev
 
       - name: Build sdist + wheel
         run: uv run python -m build
@@ -42,23 +61,51 @@ jobs:
           path: dist/
 
   pypi-publish:
+    name: Publish to PyPI
+    needs: build
+    # tag 触发才发 PyPI；手动 dry_run 也跳过发 PyPI
+    if: |
+      startsWith(github.ref, 'refs/tags/v') &&
+      (github.event_name != 'workflow_dispatch' || github.event.inputs.dry_run != 'true')
     runs-on: ubuntu-latest
-    needs:
-      - release-build
     permissions:
-      # IMPORTANT: this permission is mandatory for trusted publishing
+      # Trusted Publishing 必填
       id-token: write
     environment:
       name: pypi
+      url: https://pypi.org/p/dumplingsAI
 
     steps:
-      - name: Retrieve release distributions
+      - name: Download distributions
         uses: actions/download-artifact@v4
         with:
           name: release-dists
           path: dist/
 
-      - name: Publish release distributions to PyPI
+      - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
+
+  github-release:
+    name: Create GitHub Release
+    needs: build
+    # 仅 tag 触发才创建 Release；手动 dry_run 不创建
+    if: startsWith(github.ref, 'refs/tags/v') && github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: release-dists
+          path: dist/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+            dist/*.whl
