@@ -23,7 +23,9 @@ jobs:
       uses: astral-sh/setup-uv@v6
       with:
         enable-cache: true
-        cache-dependency-glob: "uv.lock"
+        # 子模块没有 uv.lock（依赖 lock 在根项目 AI_Company/uv.lock 里），
+        # 不能用 cache-dependency-glob: "uv.lock"，否则 setup-uv 会因为找不到文件而失败。
+        cache-dependency-glob: "**/pyproject.toml"
 
     - name: Set up Python ${{ matrix.python-version }}
       run: uv python install ${{ matrix.python-version }}
