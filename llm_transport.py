@@ -82,6 +82,7 @@ class LLMEvent:
     text: str = ""
     tool_call: Optional[ToolCall] = None
     usage: Optional[UsageInfo] = None
+    stop_reason: Optional[str] = None     # "end_turn" / "stop" / "tool_use" / "max_tokens" …
     raw: Any = None
 
 

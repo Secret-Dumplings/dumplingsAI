@@ -398,6 +398,16 @@ class AnthropicAgent:
                             assistant_blocks.append({"type": "text", "text": evt.text})
                             self.out({"message": evt.text})
                         elif evt.type == "tool_call" and evt.tool_call is not None:
+                            # 必须把 tool_use 块追加到 assistant_blocks，
+                            # 否则下一轮的 tool_result 找不到对应的 tool_use_id，
+                            # Anthropic 会返 400 "tool result's tool id not found"。
+                            tool_use_block = {
+                                "type": "tool_use",
+                                "id": evt.tool_call.id,
+                                "name": evt.tool_call.name,
+                                "input": evt.tool_call.arguments,
+                            }
+                            assistant_blocks.append(tool_use_block)
                             tool_uses.append({
                                 "id": evt.tool_call.id,
                                 "name": evt.tool_call.name,
@@ -410,6 +420,13 @@ class AnthropicAgent:
                 else:
                     llm_rsp: LLMResponse = transport.chat(req)
                     for tc in llm_rsp.tool_calls:
+                        # 同样：tool_use 块必须出现在 assistant 消息里
+                        assistant_blocks.append({
+                            "type": "tool_use",
+                            "id": tc.id,
+                            "name": tc.name,
+                            "input": tc.arguments,
+                        })
                         tool_uses.append({
                             "id": tc.id,
                             "name": tc.name,
@@ -517,6 +534,16 @@ class AnthropicAgent:
                             assistant_blocks.append({"type": "text", "text": evt.text})
                             self.out({"message": evt.text})
                         elif evt.type == "tool_call" and evt.tool_call is not None:
+                            # 必须把 tool_use 块追加到 assistant_blocks，
+                            # 否则下一轮的 tool_result 找不到对应的 tool_use_id，
+                            # Anthropic 会返 400 "tool result's tool id not found"。
+                            tool_use_block = {
+                                "type": "tool_use",
+                                "id": evt.tool_call.id,
+                                "name": evt.tool_call.name,
+                                "input": evt.tool_call.arguments,
+                            }
+                            assistant_blocks.append(tool_use_block)
                             tool_uses.append({
                                 "id": evt.tool_call.id,
                                 "name": evt.tool_call.name,
@@ -525,6 +552,13 @@ class AnthropicAgent:
                 else:
                     llm_rsp: LLMResponse = await transport.achat(req)
                     for tc in llm_rsp.tool_calls:
+                        # 同样：tool_use 块必须出现在 assistant 消息里
+                        assistant_blocks.append({
+                            "type": "tool_use",
+                            "id": tc.id,
+                            "name": tc.name,
+                            "input": tc.arguments,
+                        })
                         tool_uses.append({
                             "id": tc.id,
                             "name": tc.name,
