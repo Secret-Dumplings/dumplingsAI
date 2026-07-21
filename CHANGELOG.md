@@ -7,6 +7,31 @@ dumplingsAI 的所有显著变更记录。
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-07-21
+
+### Added
+- **`dumplingsAI.Agent` 协议无关的工厂基类**
+  - 通过类属性 `protocol = "openai" | "anthropic"` 自动选择真实基类
+  - 由 `_ProtocolMeta` metaclass 在类创建时替换占位基类，运行时零开销
+  - 直接继承 `BaseAgent` / `AnthropicAgent` 的旧写法完全兼容
+- **`examples/example7_unified_agent.py`**：演示 3 种写法
+  （旧写法 / `Agent` + `protocol` / 动态根据 env 决定协议）
+
+### Changed
+- **`AnthropicAgent.api_provider` 默认值去掉**（强制显式设置 endpoint）
+  - `_endpoint()` 在 `api_provider` 缺失时抛 `ValueError` 给出明确提示
+  - 避免"忘记设置 endpoint 误走到官方 Anthropic API"的隐性 bug
+- **全部 `examples/*.py` 中硬编码的 `model_name` 改为 `os.getenv()`**
+  - `os.getenv("OPENAI_MODEL")` / `os.getenv("ANTHROPIC_MODEL")`，无 fallback
+  - 配套 docstring 同步（`__init__.py` / `anthropic_agent.py` / `llm_transport.py`）
+
+### Fixed
+- **`AnthropicAgent` 流式分支漏写 `tool_use` 块**（导致 400 "tool result's tool id not found"）
+  - 流式 + 非流式 + 异步非流式 3 处分支都补上 `assistant_blocks.append({"type": "tool_use", ...})`
+  - 影响：多 Agent `ask_for_help` 链路不再因 `tool_use_id` 失配而失败
+- **`LLMEvent` 缺 `stop_reason` 字段**（导致 `TypeError: unexpected keyword argument 'stop_reason'`）
+  - 给 `@dataclass` `LLMEvent` 加 `stop_reason: Optional[str] = None`
+
 ## [0.2.1] - 2026-07-20
 
 ### Fixed
@@ -109,7 +134,8 @@ dumplingsAI 的所有显著变更记录。
 - `BaseAgent` 抽象基类
 - CLI 入口 `main.py`
 
-[Unreleased]: https://github.com/Secret-Dumplings/dumplingsAI/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/Secret-Dumplings/dumplingsAI/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/Secret-Dumplings/dumplingsAI/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Secret-Dumplings/dumplingsAI/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Secret-Dumplings/dumplingsAI/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/Secret-Dumplings/dumplingsAI/compare/v0.1.0...v0.1.1
