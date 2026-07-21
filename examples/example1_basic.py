@@ -16,7 +16,7 @@ class SimpleAgent(dumplingsAI.BaseAgent):
     """一个简单的问答助手 Agent"""
     prompt = "你是一个名为汤圆 AI 的简单问答助手，友好地回答用户的问题"
     api_provider = "https://api.example.com/v1/chat/completions"
-    model_name = "qwen3.5-plus"
+    model_name = os.getenv("OPENAI_MODEL")
     api_key = os.getenv("API_KEY")
 
 

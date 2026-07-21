@@ -16,7 +16,7 @@ class CustomAgent(dumplingsAI.BaseAgent):
     """具有自定义输出处理的 Agent"""
     prompt = "你是一个具有自定义输出格式的助手"
     api_provider = "https://api.example.com/v1/chat/completions"
-    model_name = "qwen3.5-plus"
+    model_name = os.getenv("OPENAI_MODEL")
     api_key = os.getenv("API_KEY")
 
     def out(self, content):

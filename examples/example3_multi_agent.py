@@ -18,7 +18,7 @@ class TimeAgent(dumplingsAI.BaseAgent):
     """时间管理者，负责提供当前时间"""
     prompt = "你是时间管理者，当被询问时间时，直接回答当前时间是 2026 年 3 月 15 日"
     api_provider = "https://api.example.com/v1/chat/completions"
-    model_name = "qwen3.5-plus"
+    model_name = os.getenv("OPENAI_MODEL")
     api_key = os.getenv("API_KEY")
 
 
@@ -29,7 +29,7 @@ class SchedulingAgent(dumplingsAI.BaseAgent):
     """调度助手，可以请求其他 Agent 帮助"""
     prompt = "你是一个调度助手，当需要查询时间时，使用 ask_for_help 工具请求 time_agent 帮助"
     api_provider = "https://api.example.com/v1/chat/completions"
-    model_name = "qwen3.5-plus"
+    model_name = os.getenv("OPENAI_MODEL")
     api_key = os.getenv("API_KEY")
 
 

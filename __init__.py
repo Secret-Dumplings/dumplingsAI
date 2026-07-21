@@ -16,32 +16,35 @@ dumplingsAI - 多智能体协作框架
     class MyAgent(dumplingsAI.BaseAgent):
         prompt = "你是一个助手"
         api_provider = "https://api.example.com/v1/chat/completions"
-        model_name = "qwen3.5-plus"
-        api_key = "your-api-key"
+        model_name = os.getenv("OPENAI_MODEL")
+        api_key = os.getenv("OPENAI_API_KEY")
 
     agent = dumplingsAI.agent_list["my_agent"]
     agent.conversation_with_tool("你好")
 
 Anthropic 协议用法::
 
-    from dumplingsAI.anthropic_agent import AnthropicAgent
-
     @dumplingsAI.register_agent("uuid-2", "claude_agent")
-    class ClaudeAgent(AnthropicAgent):
+    class ClaudeAgent(dumplingsAI.Agent):
+        protocol = "anthropic"
         prompt = "你是一个助手"
-        model_name = "claude-3-5-sonnet-latest"
-        api_key = "sk-ant-..."   # 也可指向任意兼容端点（详见 AnthropicAgent docstring）
+        model_name = os.getenv("ANTHROPIC_MODEL")
+        api_key = os.getenv("ANTHROPIC_API_KEY")        # 可指向任意兼容端点（详见 AnthropicAgent docstring）
 
     dumplingsAI.agent_list["claude_agent"].conversation_with_tool("你好")
+
+切协议只需改 ``protocol`` 字段（``"openai"`` / ``"anthropic"``），无需换基类。
+详见 ``Agent`` docstring。
 
 核心导出
 --------
 
 - ``register_agent`` : Agent 注册装饰器（双键：UUID + 名称）
 - ``tool_registry``  : 工具注册器实例（@tool_registry.register_tool）
-- ``BaseAgent``      : Agent 基类（OpenAI 协议）
+- ``Agent``          : **协议无关的 Agent 工厂基类**（用 ``protocol`` 字段选 openai / anthropic）
+- ``BaseAgent``      : Agent 基类（OpenAI 协议，直接继承时使用）
 - ``agent_list``     : 已注册 Agent 字典（按 UUID / 名称索引）
-- ``anthropic_agent.AnthropicAgent`` : Anthropic 协议 Agent 基类
+- ``anthropic_agent.AnthropicAgent`` : Anthropic 协议 Agent 基类（直接继承时使用）
 - ``mcp_bridge``     : MCP 服务器集成（register_mcp_tools 等）
 - ``skill``          : Agent Skills 开放标准集成
 
@@ -95,11 +98,101 @@ except Exception:  # pragma: no cover
     __version__ = "0.0.0+unknown"
 
 __author__ = "secret_dumplings"
+
+
+# ======================================================================
+# 协议无关的 Agent 工厂：``Agent`` + ``protocol`` 字段自动选基类
+# ======================================================================
+#
+# 之前用户得手动区分 ``dumplingsAI.BaseAgent`` / ``dumplingsAI.anthropic_agent.AnthropicAgent``。
+# 现在统一用 ``dumplingsAI.Agent``，靠类属性 ``protocol = "openai" | "anthropic"`` 决定实际继承谁。
+
+
+class _ProtocolMeta(type):
+    """协议分发 metaclass。
+
+    当用户写 ``class MyAgent(dumplingsAI.Agent): protocol = "anthropic"`` 时，
+    把 ``Agent`` 占位基类替换成对应的真实基类（``BaseAgent`` / ``AnthropicAgent``）。
+    之后 ``MyAgent`` 实际是 ``AnthropicAgent`` 的子类，所有功能一致。
+    """
+
+    def __new__(mcs, name, bases, namespace, **kwargs):
+        # Agent 是在 metaclass 之后才定义的；但 globals() 查找保证 __new__ 调用时
+        # Agent 已存在（因为 Agent 类体在 metaclass 定义之后执行）。
+        if globals().get("Agent") in bases:
+            protocol = namespace.get("protocol", "openai")
+            if not isinstance(protocol, str):
+                raise TypeError(
+                    f"{name}.protocol 必须是字符串，当前是 {type(protocol).__name__}"
+                )
+            real_base = _PROTOCOLS.get(protocol.lower())
+            if real_base is None:
+                raise ValueError(
+                    f"{name}.protocol={protocol!r} 不支持。"
+                    f"可选值：{sorted(_PROTOCOLS)}"
+                )
+            new_bases = tuple(real_base if b is Agent else b for b in bases)
+            return super().__new__(mcs, name, new_bases, namespace, **kwargs)
+        return super().__new__(mcs, name, bases, namespace, **kwargs)
+
+
+# _PROTOCOLS 在 Agent 类定义之前就要准备好，否则 metaclass.__new__ 找不到真实基类。
+# anthropic_agent 的 import 放这里，避免顶层 import 出错时整个包加载失败。
+_PROTOCOLS = {"openai": BaseAgent, "anthropic": None}
+try:
+    from .anthropic_agent import AnthropicAgent as _AnthropicAgent
+    _PROTOCOLS["anthropic"] = _AnthropicAgent
+except ImportError:  # pragma: no cover
+    _AnthropicAgent = None
+
+
+class Agent(metaclass=_ProtocolMeta):
+    """协议无关的 Agent 工厂基类。
+
+    通过类属性 ``protocol`` 自动选择真实基类：
+
+    =============  ====================================================
+    ``protocol``   实际继承
+    =============  ====================================================
+    ``"openai"``   :class:`BaseAgent`（默认，OpenAI 兼容协议）
+    ``"anthropic"``:class:`dumplingsAI.anthropic_agent.AnthropicAgent`
+    =============  ====================================================
+
+    用法::
+
+        @dumplingsAI.register_agent("uuid-1", "my_agent")
+        class MyAgent(dumplingsAI.Agent):
+            protocol = "anthropic"   # 关键：决定继承哪个真实基类
+            prompt = "你是一个助手"
+            model_name = os.getenv("ANTHROPIC_MODEL")
+            api_key = os.getenv("ANTHROPIC_API_KEY")
+
+        # MyAgent 实际是 AnthropicAgent 的子类，行为与直接继承一致。
+        # 切换协议只需改 protocol 字段，不需要换基类。
+
+    兼容写法（直接选基类）仍然支持::
+
+        @dumplingsAI.register_agent(...)
+        class MyAgent(dumplingsAI.BaseAgent):                 # OpenAI
+            ...
+
+        @dumplingsAI.register_agent(...)
+        class ClaudeAgent(dumplingsAI.anthropic_agent.AnthropicAgent):  # Anthropic
+            ...
+
+    选哪种？两种等价。``Agent`` + ``protocol`` 字段的好处是：协议可配置（可以从环境变量、
+    config 文件、或者更高层 Agent 动态决定）。
+    """
+
+    protocol: str = "openai"
+
+
 __all__ = [
     # 核心组件
     "register_agent",
     "tool_registry",
-    "BaseAgent",
+    "Agent",          # 协议无关的工厂基类（推荐）
+    "BaseAgent",      # OpenAI 协议基类（直接继承时用）
     "agent_list",
     # MCP 功能
     "register_mcp_tools",

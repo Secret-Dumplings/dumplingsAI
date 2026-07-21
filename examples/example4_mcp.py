@@ -16,7 +16,7 @@ class MCPAgent(dumplingsAI.BaseAgent):
     """可以使用 MCP 服务器工具的 Agent"""
     prompt = "你是一个可以使用 MCP 服务器工具的助手"
     api_provider = "https://api.example.com/v1/chat/completions"
-    model_name = "qwen3.5-plus"
+    model_name = os.getenv("OPENAI_MODEL")
     api_key = os.getenv("API_KEY")
 
 

@@ -104,7 +104,7 @@ class AnthropicAgent:
         prompt        : 系统提示词
         api_provider  : base URL（默认 ``https://api.anthropic.com``，可指向任意
                         兼容 Anthropic Messages API 的服务，详见下文"自定义服务商"）
-        model_name    : 模型名，如 ``claude-3-5-sonnet-latest``
+        model_name    : 模型名（必填，推荐通过 ``os.getenv("ANTHROPIC_MODEL")`` 注入）
         api_key       : ``x-api-key`` 头的值
     可选类属性:
         max_tokens        : 单次响应上限（默认 4096）
@@ -117,12 +117,15 @@ class AnthropicAgent:
     ``AnthropicAgent`` 不只面向官方 ``api.anthropic.com``，可指向任意兼容
     Anthropic Messages API 的服务：
 
-    1. **官方 Anthropic** —— 留空 ``api_provider`` 即可，默认走 ``https://api.anthropic.com``
+    1. **官方 Anthropic** —— ``api_provider = "https://api.anthropic.com"``
     2. **第三方代理 / 加速网关** —— ``api_provider = "https://your-proxy.example.com"``
     3. **完整 endpoint** —— ``api_provider = "https://your-proxy.example.com/v1/messages"``
     4. **OpenAI 兼容网关的 anthropic 路径** —— ``api_provider = "https://your-gateway.com/anthropic"``
     5. **AWS Bedrock** —— ``api_provider = "bedrock-runtime.<region>.amazonaws.com"``
        （需要额外 header，可在子类 ``__init__`` 里覆盖 ``self.headers``）
+
+    注意：``api_provider`` **没有默认值**。忘记设置会在运行时抛 ``ValueError``，
+    避免"忘了改 endpoint 误走到官方 API"的隐性 bug。
 
     框架的 :py:meth:`_endpoint` 会智能拼接：
         * 末尾是 ``/v1/messages`` → 原样使用
@@ -148,7 +151,8 @@ class AnthropicAgent:
 
     # ---- 类属性默认值 ----
     prompt: Optional[str] = None
-    api_provider: Optional[str] = "https://api.anthropic.com"
+    # 不留默认 api_provider —— 强制用户显式指定 endpoint，避免"忘记设置"误走到官方 API
+    api_provider: Optional[str] = None
     model_name: Optional[str] = None
     api_key: Optional[str] = None
     max_tokens: int = 4096
@@ -258,8 +262,17 @@ class AnthropicAgent:
         return int(time.time() * 1000)
 
     def _endpoint(self) -> str:
-        """根据 api_provider 拼出 messages endpoint URL"""
-        base = (self.api_provider or "https://api.anthropic.com").rstrip("/")
+        """根据 api_provider 拼出 messages endpoint URL
+
+        Raises:
+            ValueError: 如果子类没有设置 ``api_provider`` 类属性。
+        """
+        base = (self.api_provider or "").strip().rstrip("/")
+        if not base:
+            raise ValueError(
+                f"{self.__class__.__name__} 必须显式设置 api_provider 类属性，"
+                f"不允许使用默认值。例：api_provider = 'https://api.anthropic.com'"
+            )
         if base.endswith("/v1/messages"):
             return base
         if base.endswith("/v1"):

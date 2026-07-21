@@ -2,7 +2,9 @@
 示例：AnthropicAgent 使用自定义服务商
 
 AnthropicAgent 不只面向官方 api.anthropic.com —— 你可以指向任意兼容
-Anthropic Messages API 的服务：
+Anthropic Messages API 的服务。
+**注意**：v0.2.2+ 不再保留 api_provider 默认值，必须显式写出 endpoint。
+
   1) 官方 Anthropic:        https://api.anthropic.com
   2) 第三方代理 / 加速网关:  https://your-proxy.example.com
   3) AWS Bedrock:           bedrock-runtime.<region>.amazonaws.com
@@ -33,11 +35,11 @@ load_dotenv()
 # ---------- 场景 1：官方 Anthropic API ----------
 @dumplingsAI.register_agent("official-anthropic-uuid", "official_agent")
 class OfficialAgent(AnthropicAgent):
-    """走官方 api.anthropic.com —— 这是默认行为，不写 api_provider 也行"""
+    """走官方 api.anthropic.com —— 必须显式写 api_provider（v0.2.2+ 不留默认）"""
     prompt = "你是一个简洁的助手。"
-    model_name = "claude-3-5-sonnet-latest"
+    api_provider = "https://api.anthropic.com"                 # 必须显式给出
+    model_name = os.getenv("ANTHROPIC_MODEL")
     api_key = os.getenv("ANTHROPIC_API_KEY")
-    # api_provider 留空即可，默认 https://api.anthropic.com
 
 
 # ---------- 场景 2：自家代理 / 加速网关 ----------
@@ -46,7 +48,7 @@ class ProxyAgent(AnthropicAgent):
     """走你自己的 Anthropic 兼容代理"""
     prompt = "你是一个简洁的助手。"
     api_provider = "https://your-proxy.example.com"          # 框架会自动拼成 /v1/messages
-    model_name = "claude-3-5-sonnet-latest"
+    model_name = os.getenv("ANTHROPIC_MODEL")
     api_key = os.getenv("ANTHROPIC_API_KEY")                  # 网关可能用自己的 key，这里只是演示
 
 
@@ -56,7 +58,7 @@ class FullUrlAgent(AnthropicAgent):
     """如果你已经拿到完整的 messages URL，直接填进去即可（不会重复拼）"""
     prompt = "你是一个简洁的助手。"
     api_provider = "https://your-proxy.example.com/v1/messages"
-    model_name = "claude-3-5-sonnet-latest"
+    model_name = os.getenv("ANTHROPIC_MODEL")
     api_key = os.getenv("ANTHROPIC_API_KEY")
 
 
@@ -68,7 +70,7 @@ class CustomHeaderAgent(AnthropicAgent):
 
     prompt = "你是一个简洁的助手。"
     api_provider = "https://your-gateway.example.com/anthropic"
-    model_name = "claude-3-5-sonnet-latest"
+    model_name = os.getenv("ANTHROPIC_MODEL")
     api_key = "internal-tenant-key"
 
     def __init__(self, new_load=True):

@@ -367,7 +367,7 @@ class HttpxOpenAITransport(LLMTransport):
 
 class HttpxAnthropicTransport(LLMTransport):
     """
-    Anthropic Messages API (claude-3-5-sonnet 等)
+    Anthropic Messages API（claude 系列；model_name 由用户显式提供）
     """
 
     def __init__(
